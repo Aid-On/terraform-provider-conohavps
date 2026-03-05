@@ -1,0 +1,1 @@
+$ terraform import conohavps_volume.volume_1 {{volume_uuid}}

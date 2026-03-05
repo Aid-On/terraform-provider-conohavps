@@ -1,0 +1,19 @@
+{
+    // Linter設定: golangci-lintを使用してファイル保存時にパッケージ全体をチェック
+    "go.lintTool": "golangci-lint",
+    "go.lintOnSave": "package",
+    "go.lintFlags": [
+        "--path-mode=abs",
+        "--fast-only"
+    ],
+
+    // Formatter設定: gofmtを使用（.golangci.ymlと整合性を保つ）
+    "go.formatTool": "gofmt",
+
+     // Go言語ファイルの保存時にimport文を自動整理
+    "[go]": {
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        }
+    }
+}

@@ -1,24 +1,26 @@
-default: fmt lint install generate
+.DEFAULT_GOAL := help
 
+.PHONY: help
+help:
+	@cat $(firstword $(MAKEFILE_LIST))
+
+.PHONY: build
 build:
 	go build -v ./...
 
+.PHONY: install
 install: build
 	go install -v ./...
 
+.PHONY: lint
 lint:
 	golangci-lint run
 
-generate:
-	cd tools; go generate ./...
-
+.PHONY: fmt
 fmt:
 	gofmt -s -w -e .
 
-test:
-	go test -v -cover -timeout=120s -parallel=10 ./...
-
+.PHONY: testacc
 testacc:
-	TF_ACC=1 go test -v -cover -timeout 120m ./...
+	TF_ACC=1 go test -v -timeout 60m ./...
 
-.PHONY: fmt lint test testacc build install generate

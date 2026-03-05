@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Compute"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/compute/keypair/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Keypairs can be imported using its `name` .
+
+{{ codefile "shell" "examples/resources/compute/keypair/import.sh" }}

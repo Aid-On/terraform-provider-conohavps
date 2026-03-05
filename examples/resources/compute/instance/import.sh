@@ -1,0 +1,1 @@
+$ terraform import conohavps_instance.instance_1 {{instance_uuid}}

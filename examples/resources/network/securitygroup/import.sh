@@ -1,0 +1,1 @@
+$ terraform import conohavps_securitygroup.group_1 {{securitygroup_id}}

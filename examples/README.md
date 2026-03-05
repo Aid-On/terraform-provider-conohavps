@@ -1,9 +1,6 @@
-# Examples
+# ConoHa VPS Provider の使用例
 
-This directory contains examples that are mostly used for documentation, but can also be run/tested manually via the Terraform CLI.
+このディレクトリには、Terraform で ConoHa VPS 上のリソースを管理する例がまとめられています。
 
-The document generation tool looks for files in the following locations by default. All other *.tf files besides the ones mentioned below are ignored by the documentation tool. This is useful for creating examples that can run and/or are testable even if some parts are not relevant for the documentation.
+リソースによっては、使用するパラメータについて、事前に調べていただく必要があります。[公開API(ConoHa VPS Ver.3.0)](https://doc.conoha.jp/reference/api-vps3) よりご確認ください。
 
-* **provider/provider.tf** example file for the provider index page
-* **data-sources/`full data source name`/data-source.tf** example file for the named data source page
-* **resources/`full resource name`/resource.tf** example file for the named data source page

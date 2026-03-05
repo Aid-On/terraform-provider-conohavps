@@ -1,64 +1,78 @@
-# Terraform Provider Scaffolding (Terraform Plugin Framework)
+<div align="center">
+  <img src="./assets/ConoHaVPS_logo.png" title="ConoHa VPS" height="150" />
+</div>
 
-_This template repository is built on the [Terraform Plugin Framework](https://github.com/hashicorp/terraform-plugin-framework). The template repository built on the [Terraform Plugin SDK](https://github.com/hashicorp/terraform-plugin-sdk) can be found at [terraform-provider-scaffolding](https://github.com/hashicorp/terraform-provider-scaffolding). See [Which SDK Should I Use?](https://developer.hashicorp.com/terraform/plugin/framework-benefits) in the Terraform documentation for additional information._
+# Terraform ConoHa VPS Provider
 
-This repository is a *template* for a [Terraform](https://www.terraform.io) provider. It is intended as a starting point for creating Terraform providers, containing:
+- Terraform ウェブサイト: https://developer.hashicorp.com/terraform
+- ドキュメント: https://registry.terraform.io/providers/gmo-internet/conohavps/latest/docs
 
-- A resource and a data source (`internal/provider/`),
-- Examples (`examples/`) and generated documentation (`docs/`),
-- Miscellaneous meta files.
+Terraform ConoHa VPS Provider は、Terraform が [ConoHa VPS](https://vps.conoha.jp/) 上のリソースを管理できるようにするプラグインです。
 
-These files contain boilerplate code that you will need to edit to create your own Terraform provider. Tutorials for creating Terraform providers can be found on the [HashiCorp Developer](https://developer.hashicorp.com/terraform/tutorials/providers-plugin-framework) platform. _Terraform Plugin Framework specific guides are titled accordingly._
+現在、下記リソースの管理に対応しています。
 
-Please see the [GitHub template repository documentation](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/creating-a-repository-from-a-template) for how to create a new repository from this template on GitHub.
+- サーバー
+- SSHキーペア
+- ボリューム
+- セキュリティグループ
+- セキュリティグループルール
 
-Once you've written your provider, you'll want to [publish it on the Terraform Registry](https://developer.hashicorp.com/terraform/registry/providers/publishing) so that others can use it.
+詳細については、ドキュメントを参照してください。
 
-## Requirements
+> [!IMPORTANT]
+> Terraform ConoHa VPS Provider は、APIユーザーの認証情報を使用します。APIユーザーの作成については、[APIユーザーを作成する](https://doc.conoha.jp/reference/api-vps3/api-cp-vps3/cp-create_api_user-v3/) を参照してください。
 
-- [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.0
-- [Go](https://golang.org/doc/install) >= 1.24
+> [!WARNING]
+>  本ソフトウェアは現在ベータ版です。機能や動作が予告なく変更される場合があります。本番環境での使用前には十分なテストを行ってください。このベータ版 Terraform ConoHa VPS Provider を使用することで、これらの条件に同意したものとみなされます。
 
-## Building The Provider
+## 使用例
 
-1. Clone the repository
-1. Enter the repository directory
-1. Build the provider using the Go `install` command:
+ドキュメントを参照してください。
 
-```shell
-go install
+> [!IMPORTANT]
+> 本ソフトウェアは現在ベータ版につきデータソースは提供しておりません。リソースの作成に必要なパラメータについては [公開API(ConoHa VPS Ver.3.0)](https://doc.conoha.jp/reference/api-vps3) より取得ください。
+
+## 要件
+
+- [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.0
+- [Go](https://go.dev/doc/install) >= 1.24
+
+## 開発
+
+### ビルド
+
+ビルドには Go のインストールが必要になります。
+
+Go のインストールが確認できたら、`make build` を実行します。
+
+```
+$ make build
+```
+### テスト
+
+下記の環境変数の設定が必要です。各変数の詳細については、ドキュメントを参照してください。
+
+- `CONOHAVPS_USER_ID`
+- `CONOHAVPS_PASSWORD`
+- `CONOHAVPS_TENANT_ID`
+- `CONOHAVPS_REGION`
+- `CONOHAVPS_IDENTITY_ENDPOINT`
+
+環境変数が設定できたら、`make testacc` を実行します。
+
+```
+$ make testacc
 ```
 
-## Adding Dependencies
+> [!CAUTION]
+> テストでは、ConoHa VPS 上に実際にリソースを作成するので、料金が発生することに注意してください。
 
-This provider uses [Go modules](https://github.com/golang/go/wiki/Modules).
-Please see the Go documentation for the most up to date information about using Go modules.
+## コントリビュート
 
-To add a new dependency `github.com/author/dependency` to your Terraform provider:
+- [コントリビューションガイド](./CONTRIBUTING.md)
+- [行動規範](./CODE_OF_CONDUCT.md)
+- [セキュリティポリシー](./SECURITY.md)
 
-```shell
-go get github.com/author/dependency
-go mod tidy
-```
+## ライセンス
 
-Then commit the changes to `go.mod` and `go.sum`.
-
-## Using the provider
-
-Fill this in for each provider
-
-## Developing the Provider
-
-If you wish to work on the provider, you'll first need [Go](http://www.golang.org) installed on your machine (see [Requirements](#requirements) above).
-
-To compile the provider, run `go install`. This will build the provider and put the provider binary in the `$GOPATH/bin` directory.
-
-To generate or update documentation, run `make generate`.
-
-In order to run the full suite of Acceptance tests, run `make testacc`.
-
-*Note:* Acceptance tests create real resources, and often cost money to run.
-
-```shell
-make testacc
-```
+このプロジェクトは [Apache License 2.0](LICENSE) の下で公開されています。

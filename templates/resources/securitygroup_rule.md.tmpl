@@ -1,0 +1,26 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Network"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+~> To expose all ports (1-65535), set `port_range_min` and `port_range_max` to `0`.
+
+## Example Usage
+
+{{ tffile "examples/resources/network/securitygroup_rule/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Security group rule can be imported using its `id` .
+
+For example:
+
+{{ codefile "shell" "examples/resources/network/securitygroup_rule/import.sh" }}

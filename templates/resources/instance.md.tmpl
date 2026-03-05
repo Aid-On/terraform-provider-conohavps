@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Compute"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/compute/instance/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Instances can be imported using its `id` .
+
+{{ codefile "shell" "examples/resources/compute/instance/import.sh" }}

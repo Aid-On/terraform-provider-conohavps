@@ -1,0 +1,1 @@
+$ terraform import conohavps_keypair.keypair_1 {{keypair_name}}

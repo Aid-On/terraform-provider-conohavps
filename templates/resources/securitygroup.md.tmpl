@@ -1,0 +1,24 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Network"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/network/securitygroup/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Security group can be imported using its `id` .
+
+For example:
+
+{{ codefile "shell" "examples/resources/network/securitygroup/import.sh" }}
