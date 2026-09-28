@@ -14,8 +14,10 @@ func TestImageSize(t *testing.T) {
 			t.Errorf("ParseImageSize(%q) = %d, %v", s, gb, err)
 		}
 	}
-	if _, err := ParseImageSize("lots"); err == nil {
-		t.Error("ParseImageSize accepted a non-number")
+	for _, s := range []string{"lots", "550", "0.5TB", "550GiB"} {
+		if _, err := ParseImageSize(s); err == nil {
+			t.Errorf("ParseImageSize accepted %q, which is not a whole number of GB", s)
+		}
 	}
 	for gb, want := range map[int64]bool{50: true, 550: true, 1050: true, 0: false, 100: false, 500: false, 600: false} {
 		if ValidImageQuota(gb) != want {

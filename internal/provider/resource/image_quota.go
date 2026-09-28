@@ -43,7 +43,8 @@ func (r *imageQuotaResource) Metadata(_ context.Context, req resource.MetadataRe
 func (r *imageQuotaResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages the image save capacity (quota) of the account, where saved images are stored. **This changes your bill**: the default 50 GB is free, and ConoHa charges for each 500 GB added to it. " +
-			"The account has exactly one image quota, so declare this resource at most once per tenant.\n\n" +
+			"The account has exactly one image quota, so declare this resource at most once per tenant. " +
+			"A capacity set back to the free 50 GB outside Terraform is treated as removed, and the next apply sets it again.\n\n" +
 			"**Destroy** sets the capacity back to 50 GB (the free default; it cannot be set lower). " +
 			"The capacity cannot be reduced below the space the images use: shrinking it, or destroying this resource while more than 50 GB of images remain, fails with the API's error and nothing is changed. Delete images first; `data.conohavps_image_usage` shows the usage.",
 		Attributes: map[string]schema.Attribute{
@@ -55,10 +56,10 @@ func (r *imageQuotaResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				},
 			},
 			"image_size_gb": schema.Int64Attribute{
-				MarkdownDescription: "The image save capacity in GB: 50 plus a multiple of 500 (50, 550, 1050, ...). It cannot be set below the space the images use.",
+				MarkdownDescription: "The image save capacity in GB: the free 50 GB plus a multiple of 500 GB, at least 550 (550, 1050, 1550, ...). It cannot be set below the space the images use.",
 				Required:            true,
 				Validators: []validator.Int64{
-					quotaStepValidator{min: service.ImageQuotaDefaultGB, base: service.ImageQuotaDefaultGB, step: service.ImageQuotaStepGB},
+					quotaStepValidator{min: service.ImageQuotaMinPaidGB, base: service.ImageQuotaDefaultGB, step: service.ImageQuotaStepGB},
 				},
 			},
 		},
@@ -144,6 +145,12 @@ func (r *imageQuotaResource) Read(ctx context.Context, req resource.ReadRequest,
 			"An unexpected error occurred while attempting to read image quota resource.\n\n"+
 				"Error: "+err.Error(),
 		)
+		return
+	}
+
+	// 容量が既定（無料の 50GB）に戻っていれば、足した容量が無い（リソースが無い）ものとして扱う
+	if size == service.ImageQuotaDefaultGB {
+		resp.State.RemoveResource(ctx)
 		return
 	}
 

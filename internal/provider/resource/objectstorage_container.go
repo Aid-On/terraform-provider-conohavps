@@ -1,6 +1,7 @@
 // オブジェクトストレージのコンテナのリソースを提供する.
-// バージョニング（X-Versions-Location）と Web 公開（X-Container-Read: .r:*）は、
-// どちらもコンテナにヘッダーで設定する値なので、コンテナの属性として持つ.
+// バージョニング（X-Versions-Location）・ACL（X-Container-Read / Write）・Web 公開（X-Container-Meta-Web-*）・
+// メタデータ（X-Container-Meta-*）は、どれもコンテナにヘッダーで設定する値なので、コンテナの属性として持つ.
+// Read は HEAD が返したヘッダーだけから属性を埋め、外で変えられた値を差分として見せる.
 
 package resource
 
@@ -9,18 +10,19 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/gmo-internet/terraform-provider-conohavps/internal/provider/service"
+	"github.com/hashicorp/terraform-plugin-framework-validators/mapvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -31,13 +33,54 @@ import (
 var _ resource.Resource = &objectStorageContainerResource{}
 var _ resource.ResourceWithImportState = &objectStorageContainerResource{}
 
-// Web 公開のときに X-Container-Read に設定する値（Read 権限をすべて許可する）.
-const publicReadACL = ".r:*"
-
 // コンテナ名の制約（Swift の上限 256 バイト、"/" を含まない）.
 var containerNameValidators = []validator.String{
 	stringvalidator.LengthBetween(1, 256),
 	stringvalidator.RegexMatches(regexp.MustCompile(`^[^/]+$`), "must not contain a slash (/)."),
+}
+
+// ヘッダーの値の制約. 空の値は解除と同じ意味になり、前後の空白と制御文字は HTTP で保たれないため、どれも許さない.
+var headerValueValidators = []validator.String{
+	stringvalidator.RegexMatches(
+		regexp.MustCompile(`^[^\x00-\x20\x7f](?:[^\x00-\x1f\x7f]*[^\x00-\x20\x7f])?$`),
+		"must not be empty, start or end with a space, or contain control characters.",
+	),
+}
+
+// メタデータのキーの制約. API はキーの大文字・小文字を区別せず、"_" を "-" と同じに扱うため、小文字・数字・"-"・"." に限る.
+var metadataKeyValidators = []validator.String{
+	stringvalidator.RegexMatches(regexp.MustCompile(`^[a-z0-9]+(?:[.-][a-z0-9]+)*$`), "must be lowercase letters, digits, hyphens (-) and dots (.), such as `owner` or `access-control-allow-origin`."),
+	stringvalidator.NoneOf(service.ReservedContainerMetaKeys...),
+}
+
+// ACL の書き方の別名（Swift 互換の API は .r: に書き換えて保存する）.
+var aclReferrerAlias = regexp.MustCompile(`(?:^|,)\.(?:ref|referer|referrer):`)
+
+// containerACLValidator は、ACL が API の保存する形で書かれていることを検証する.
+// Swift 互換の API は空白を詰め、.referrer: などの別名を .r: に書き換えて保存するため、それ以外の形では Read との差分が出続ける.
+type containerACLValidator struct{}
+
+func (v containerACLValidator) Description(_ context.Context) string {
+	return "value must be comma-separated grants without spaces, using `.r:` for referrer grants"
+}
+
+func (v containerACLValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v containerACLValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	acl := req.ConfigValue.ValueString()
+	switch {
+	case acl == "" || strings.ContainsAny(acl, " \t\r\n"):
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid ACL",
+			fmt.Sprintf("The ACL must not be empty or contain spaces; separate the grants with commas only, such as \".r:*,.rlistings\", got: %q.", acl))
+	case aclReferrerAlias.MatchString(acl):
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid ACL",
+			fmt.Sprintf("Write referrer grants as \".r:\"; the API stores \".ref:\", \".referer:\" and \".referrer:\" as \".r:\", got: %q.", acl))
+	}
 }
 
 func NewObjectStorageContainerResource() resource.Resource {
@@ -52,7 +95,13 @@ type objectStorageContainerResourceModel struct {
 	ID               types.String `tfsdk:"id"`                // コンテナ名と同じ
 	Name             types.String `tfsdk:"name"`              // コンテナ名
 	VersionsLocation types.String `tfsdk:"versions_location"` // 古いオブジェクトの保存先コンテナ
-	WebPublishing    types.Bool   `tfsdk:"web_publishing"`    // Web 公開するか
+	ContainerRead    types.String `tfsdk:"container_read"`    // Read 権限の ACL
+	ContainerWrite   types.String `tfsdk:"container_write"`   // Write 権限の ACL
+	WebIndex         types.String `tfsdk:"web_index"`         // Web 公開のインデックスファイル
+	WebListings      types.Bool   `tfsdk:"web_listings"`      // Web 公開でオブジェクト一覧を表示するか
+	WebListingsCSS   types.String `tfsdk:"web_listings_css"`  // オブジェクト一覧のスタイルシート
+	WebError         types.String `tfsdk:"web_error"`         // Web 公開のエラーファイルの接尾辞
+	Metadata         types.Map    `tfsdk:"metadata"`          // 任意のメタデータ
 	ObjectCount      types.Int64  `tfsdk:"object_count"`      // オブジェクト数
 	BytesUsed        types.Int64  `tfsdk:"bytes_used"`        // 使用量（byte）
 	StoragePolicy    types.String `tfsdk:"storage_policy"`    // ストレージポリシー
@@ -65,7 +114,9 @@ func (r *objectStorageContainerResource) Metadata(_ context.Context, req resourc
 func (r *objectStorageContainerResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages an object storage container. Objects cannot be stored until the account has a capacity; set it with `conohavps_objectstorage_quota`. " +
-			"A container that still holds objects cannot be deleted: destroying it fails with the API's error until the objects are removed (this provider does not manage objects).",
+			"A container that still holds objects cannot be deleted: destroying it fails with the API's error (409) until the objects are removed (this provider does not manage objects).\n\n" +
+			"Every setting is read back from the container, so a value changed outside Terraform shows as a difference, and a setting that is not in the configuration is removed on the next apply. " +
+			"To publish the container on the web, allow everyone to read it with `container_read = \".r:*\"`, and set `web_index` to serve an index file.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "The name of the container.",
@@ -83,17 +134,55 @@ func (r *objectStorageContainerResource) Schema(_ context.Context, _ resource.Sc
 				},
 			},
 			"versions_location": schema.StringAttribute{
-				MarkdownDescription: "The name of the container that keeps old versions of objects (object versioning). " +
-					"When an object with the same name is uploaded, the old object is saved to this container with a timestamp. " +
+				MarkdownDescription: "The name of the container that keeps old versions of objects (object versioning, `X-Versions-Location`). " +
+					"When an object with the same name is uploaded, the old object is saved to this container. " +
 					"The container must already exist; reference its `conohavps_objectstorage_container` so that it is created first. Removing this value turns versioning off.",
 				Optional:   true,
 				Validators: containerNameValidators,
 			},
-			"web_publishing": schema.BoolAttribute{
-				MarkdownDescription: "Whether the objects in the container are published on the web, by allowing read access to everyone (`X-Container-Read: .r:*`). Defaults to `false`.",
+			"container_read": schema.StringAttribute{
+				MarkdownDescription: "The access control list that grants read access (`X-Container-Read`), as comma-separated grants without spaces. " +
+					"`.r:*` lets everyone read the objects, which publishes them on the web; `.r:*,.rlistings` also lets everyone list them. Removing this value removes the ACL.",
+				Optional:   true,
+				Validators: []validator.String{containerACLValidator{}},
+			},
+			"container_write": schema.StringAttribute{
+				MarkdownDescription: "The access control list that grants write access (`X-Container-Write`), as comma-separated grants without spaces. Removing this value removes the ACL.",
 				Optional:            true,
-				Computed:            true,
-				Default:             booldefault.StaticBool(false),
+				Validators:          []validator.String{containerACLValidator{}},
+			},
+			"web_index": schema.StringAttribute{
+				MarkdownDescription: "The index file served for the container and its pseudo-directories when it is published on the web, such as `index.html` (`X-Container-Meta-Web-Index`). " +
+					"It takes effect only when `container_read` lets everyone read.",
+				Optional:   true,
+				Validators: headerValueValidators,
+			},
+			"web_listings": schema.BoolAttribute{
+				MarkdownDescription: "Whether a pseudo-directory without an index file is shown as an HTML list of its objects when the container is published on the web (`X-Container-Meta-Web-Listings`). " +
+					"Leaving it unset removes the setting, which the API treats as `false`.",
+				Optional: true,
+			},
+			"web_listings_css": schema.StringAttribute{
+				MarkdownDescription: "The stylesheet used for the object lists of `web_listings` (`X-Container-Meta-Web-Listings-CSS`).",
+				Optional:            true,
+				Validators:          headerValueValidators,
+			},
+			"web_error": schema.StringAttribute{
+				MarkdownDescription: "The suffix of the error files served when the container is published on the web, such as `error.html`, which serves `404error.html` for a missing object (`X-Container-Meta-Web-Error`).",
+				Optional:            true,
+				Validators:          headerValueValidators,
+			},
+			"metadata": schema.MapAttribute{
+				MarkdownDescription: "Custom metadata of the container (`X-Container-Meta-{key}`). Keys must be lowercase letters, digits, hyphens and dots; " +
+					"the keys that other attributes manage (`web-index`, `web-listings`, `web-listings-css`, `web-error`) and the temporary URL keys (`temp-url-key`, `temp-url-key-2`) cannot be used. " +
+					"Metadata set outside Terraform shows as a difference and is removed on the next apply.",
+				ElementType: types.StringType,
+				Optional:    true,
+				Validators: []validator.Map{
+					mapvalidator.SizeAtLeast(1),
+					mapvalidator.KeysAre(metadataKeyValidators...),
+					mapvalidator.ValueStringsAre(headerValueValidators...),
+				},
 			},
 			"object_count": schema.Int64Attribute{
 				MarkdownDescription: "The number of objects in the container.",
@@ -148,8 +237,8 @@ func (r *objectStorageContainerResource) Create(ctx context.Context, req resourc
 	name := plan.Name.ValueString()
 	tflog.Debug(ctx, "Starting container creation request.", map[string]any{"name": name})
 
-	// コンテナ作成
-	if err := r.client.CreateContainer(ctx, name); err != nil {
+	// コンテナ作成. バージョニングは OpenAPI 仕様のとおり作成と同時に有効にする
+	if err := r.client.CreateContainer(ctx, name, plan.VersionsLocation.ValueString()); err != nil {
 		resp.Diagnostics.AddError(
 			"Failed to create object storage container resource",
 			"An unexpected error occurred while attempting to create object storage container resource.\n\n"+
@@ -162,17 +251,21 @@ func (r *objectStorageContainerResource) Create(ctx context.Context, req resourc
 	plan.ID = types.StringValue(name)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), plan.ID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), plan.Name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("versions_location"), plan.VersionsLocation)...)
 
-	// バージョニングと Web 公開は、作成とは別のリクエストで設定する
-	headers := containerSettingHeaders(objectStorageContainerResourceModel{
-		VersionsLocation: types.StringNull(),
-		WebPublishing:    types.BoolValue(false),
-	}, plan)
+	// ACL・Web 公開・メタデータは、作成とは別のリクエスト（POST）で設定する
+	created := emptyContainerModel()
+	created.VersionsLocation = plan.VersionsLocation
+	headers, diags := containerSettingHeaders(ctx, created, plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	if len(headers) > 0 {
 		if err := r.client.UpdateContainer(ctx, name, headers); err != nil {
 			resp.Diagnostics.AddError(
 				"Failed to configure object storage container resource",
-				"The container was created, but an error occurred while attempting to set its versioning or web publishing.\n\n"+
+				"The container was created, but an error occurred while attempting to set its ACLs, web publishing or metadata.\n\n"+
 					"Error: "+err.Error(),
 			)
 			return
@@ -215,7 +308,7 @@ func (r *objectStorageContainerResource) Read(ctx context.Context, req resource.
 
 	tflog.Debug(ctx, "Container read request completed.", map[string]any{})
 
-	setContainerState(&state, container)
+	resp.Diagnostics.Append(setContainerState(ctx, &state, container)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -229,7 +322,11 @@ func (r *objectStorageContainerResource) Update(ctx context.Context, req resourc
 	}
 
 	name := state.Name.ValueString()
-	headers := containerSettingHeaders(state, plan)
+	headers, diags := containerSettingHeaders(ctx, state, plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	tflog.Debug(ctx, "Starting container update request.", map[string]any{"name": name, "headers": headers})
 
@@ -301,55 +398,101 @@ func (r *objectStorageContainerResource) refresh(ctx context.Context, model *obj
 		)
 		return diags
 	}
-	setContainerState(model, container)
-	return diags
+	return setContainerState(ctx, model, container)
 }
 
-// API の値を model に写す.
-func setContainerState(model *objectStorageContainerResourceModel, container *service.ObjectStorageContainer) {
+// 設定が1つも無い（作成した直後の）コンテナの model を返す.
+func emptyContainerModel() objectStorageContainerResourceModel {
+	return objectStorageContainerResourceModel{
+		VersionsLocation: types.StringNull(),
+		ContainerRead:    types.StringNull(),
+		ContainerWrite:   types.StringNull(),
+		WebIndex:         types.StringNull(),
+		WebListings:      types.BoolNull(),
+		WebListingsCSS:   types.StringNull(),
+		WebError:         types.StringNull(),
+		Metadata:         types.MapNull(types.StringType),
+	}
+}
+
+// API の値を model に写す. ヘッダーが無い設定は null にする.
+func setContainerState(ctx context.Context, model *objectStorageContainerResourceModel, container *service.ObjectStorageContainer) (diags diag.Diagnostics) {
 	model.ID = types.StringValue(container.Name)
 	model.Name = types.StringValue(container.Name)
-	if container.VersionsLocation == "" {
-		model.VersionsLocation = types.StringNull()
+	model.VersionsLocation = optionalString(container.VersionsLocation)
+	model.ContainerRead = optionalString(container.ContainerRead)
+	model.ContainerWrite = optionalString(container.ContainerWrite)
+	model.WebIndex = optionalString(container.WebIndex)
+	model.WebListings = types.BoolPointerValue(container.WebListings)
+	model.WebListingsCSS = optionalString(container.WebListingsCSS)
+	model.WebError = optionalString(container.WebError)
+	if len(container.Metadata) == 0 {
+		model.Metadata = types.MapNull(types.StringType)
 	} else {
-		model.VersionsLocation = types.StringValue(container.VersionsLocation)
+		model.Metadata, diags = types.MapValueFrom(ctx, types.StringType, container.Metadata)
 	}
-	model.WebPublishing = types.BoolValue(isPublicRead(container.ContainerRead))
 	model.ObjectCount = types.Int64Value(container.ObjectCount)
 	model.BytesUsed = types.Int64Value(container.BytesUsed)
 	model.StoragePolicy = types.StringValue(container.StoragePolicy)
+	return diags
 }
 
-// Read 権限の ACL に、すべてを許可する .r:* が含まれるか.
-func isPublicRead(acl string) bool {
-	for _, grant := range strings.Split(acl, ",") {
-		if strings.TrimSpace(grant) == publicReadACL {
-			return true
-		}
+// 空の値を null にする.
+func optionalString(v string) types.String {
+	if v == "" {
+		return types.StringNull()
 	}
-	return false
+	return types.StringValue(v)
 }
 
-// 現在の値 from から from→to に変えるためのヘッダーを返す.
-// 解除はドキュメントのとおり値が空のヘッダー（X-Remove-Versions-Location / X-Container-Read）で行う.
-func containerSettingHeaders(from, to objectStorageContainerResourceModel) map[string]string {
+// 現在の値 from から from→to に変えるためのヘッダーを返す. 変わらない設定のヘッダーは送らない.
+// 解除は X-Remove- を前に付けたヘッダー（OpenAPI 仕様の X-Remove-Versions-Location と同じ形）で行う.
+func containerSettingHeaders(ctx context.Context, from, to objectStorageContainerResourceModel) (map[string]string, diag.Diagnostics) {
 	headers := map[string]string{}
 
-	if !from.VersionsLocation.Equal(to.VersionsLocation) {
-		if to.VersionsLocation.IsNull() {
-			headers["X-Remove-Versions-Location"] = ""
-		} else {
-			headers["X-Versions-Location"] = to.VersionsLocation.ValueString()
+	setString := func(header string, from, to types.String, encode func(string) string) {
+		switch {
+		case from.Equal(to):
+		case to.IsNull():
+			headers[service.RemoveHeader(header)] = service.RemoveHeaderValue
+		default:
+			headers[header] = encode(to.ValueString())
+		}
+	}
+	asIs := func(v string) string { return v }
+	setString(service.HeaderVersionsLocation, from.VersionsLocation, to.VersionsLocation, service.EncodeVersionsLocation)
+	setString(service.HeaderContainerRead, from.ContainerRead, to.ContainerRead, asIs)
+	setString(service.HeaderContainerWrite, from.ContainerWrite, to.ContainerWrite, asIs)
+	setString(service.HeaderWebIndex, from.WebIndex, to.WebIndex, asIs)
+	setString(service.HeaderWebListingsCSS, from.WebListingsCSS, to.WebListingsCSS, asIs)
+	setString(service.HeaderWebError, from.WebError, to.WebError, asIs)
+
+	switch {
+	case from.WebListings.Equal(to.WebListings):
+	case to.WebListings.IsNull():
+		headers[service.RemoveHeader(service.HeaderWebListings)] = service.RemoveHeaderValue
+	default:
+		headers[service.HeaderWebListings] = strconv.FormatBool(to.WebListings.ValueBool())
+	}
+
+	var diags diag.Diagnostics
+	fromMeta, toMeta := map[string]string{}, map[string]string{}
+	if !from.Metadata.IsNull() {
+		diags.Append(from.Metadata.ElementsAs(ctx, &fromMeta, false)...)
+	}
+	if !to.Metadata.IsNull() {
+		diags.Append(to.Metadata.ElementsAs(ctx, &toMeta, false)...)
+	}
+	for key, value := range toMeta {
+		if old, ok := fromMeta[key]; !ok || old != value {
+			headers[service.ContainerMetaPrefix+key] = value
+		}
+	}
+	for key := range fromMeta {
+		if _, ok := toMeta[key]; !ok {
+			headers[service.RemoveHeader(service.ContainerMetaPrefix+key)] = service.RemoveHeaderValue
 		}
 	}
 
-	if !from.WebPublishing.Equal(to.WebPublishing) {
-		if to.WebPublishing.ValueBool() {
-			headers["X-Container-Read"] = publicReadACL
-		} else {
-			headers["X-Container-Read"] = ""
-		}
-	}
-
-	return headers
+	return headers, diags
 }
