@@ -29,6 +29,8 @@ Terraform ConoHa VPS Provider は、Terraform が [ConoHa VPS](https://vps.conoh
 
 詳細については、ドキュメントを参照してください。
 
+LLM やエージェント向けの要約（リソース一覧・フレーバー名・2026-09 時点の料金）は [llms.txt](llms.txt) にあります。
+
 > [!IMPORTANT]
 > Terraform ConoHa VPS Provider は、APIユーザーの認証情報を使用します。APIユーザーの作成については、[APIユーザーを作成する](https://doc.conoha.jp/reference/api-vps3/api-cp-vps3/cp-create_api_user-v3/) を参照してください。
 

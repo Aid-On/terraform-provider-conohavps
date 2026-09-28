@@ -1,0 +1,142 @@
+# Terraform ConoHa VPS Provider（Aid-On fork）
+
+> GMO インターネットの `gmo-internet/terraform-provider-conohavps`（ベータ）を Aid-On が fork し、ConoHa VPS Ver.3.0 の公開 API が提供する全リソースとデータソースを足したプロバイダ。Terraform Registry には出しておらず、手元でビルドして `dev_overrides` で使う。追加分は GMO の公式提供ではない。
+
+- リポジトリ: https://github.com/Aid-On/terraform-provider-conohavps
+- 元のプロバイダ: https://github.com/gmo-internet/terraform-provider-conohavps（Registry: community 階層、v0.1.0）
+- ConoHa VPS の API 文書: https://doc.conoha.jp/reference/api-vps3/
+- 変更点: CHANGELOG.md
+
+## リソースとデータソース
+
+| 分類 | リソース（型名） | データソース |
+| --- | --- | --- |
+| サーバー | `conohavps_instance`、`conohavps_keypair`、`conohavps_port_attachment`、`conohavps_instance_autobackup` | `conohavps_flavor`（プラン名 → ID）、`conohavps_image`（イメージ名 → ID） |
+| ボリューム | `conohavps_volume`、`conohavps_volume_attachment`、`conohavps_volume_snapshot` | `conohavps_backups` |
+| ネットワーク | `conohavps_securitygroup`、`conohavps_securitygroup_rule`、`conohavps_network`、`conohavps_subnet`、`conohavps_port`、`conohavps_additional_ip` | `conohavps_qos_policy`（ポリシー名 → ID） |
+| ロードバランサー | `conohavps_lb_loadbalancer`、`conohavps_lb_listener`、`conohavps_lb_pool`、`conohavps_lb_member`、`conohavps_lb_health_monitor` | |
+| DNS | `conohavps_dns_domain`、`conohavps_dns_record` | `conohavps_dns_domain` |
+| オブジェクトストレージ | `conohavps_objectstorage_container`、`conohavps_objectstorage_quota` | |
+| イメージ | `conohavps_image_quota` | `conohavps_image_usage` |
+| アイデンティティ | `conohavps_role`、`conohavps_subuser`、`conohavps_credential` | `conohavps_permissions` |
+
+サーバーのプランはフレーバー名で決まる。`g2l` は Linux、`g2w` は Windows Server、`g2d` は DB サーバー。`-t-` は時間課金、`-p-` はまとめトク（前払い）。`c<コア数>m<メモリ>` が続く（`g2l-t-c4m4` は Linux・時間課金・4 コア・4 GB）。`conohavps_flavor` データソースで名前から ID を引ける。
+
+## 料金
+
+2026-09-28 に ConoHa の料金ページ（https://vps.conoha.jp/pricing/ 、https://vps.conoha.jp/windows/pricing/ ）から読み取った税込み価格。ConoHa は停止中も削除するまで課金し、時間課金は月額上限を超えない。初期費用・データ転送量は無料。
+
+ConoHa 公式の https://vps.conoha.jp/llms.txt に載っている時間課金の月額は、2025 年 3 月のプラン刷新前の旧メモリプランの数字が新プラン名に付いたものになっている（4GB 3,969 円、12GB 8,083 円など）。ここでは料金ページの表示を正とする。
+
+### Linux 時間課金（月額上限）
+
+| プラン | CPU | SSD | フレーバー名 | 月額上限 |
+| --- | --- | --- | --- | --- |
+| 512MB | 1コア | 30GB | `g2l-t-c1m512` | 751円 |
+| 1GB | 2コア | 100GB | `g2l-t-c2m1` | 1,065円 |
+| 2GB | 3コア | 100GB | `g2l-t-c3m2` | 2,033円 |
+| 4GB | 4コア | 100GB | `g2l-t-c4m4` | 3,608円 |
+| 12GB | 6コア | 100GB | `g2l-t-c6m12` | 7,348円 |
+| 24GB | 8コア | 100GB | `g2l-t-c8m24` | 14,300円 |
+| 48GB | 12コア | 100GB | `g2l-t-c12m48` | 28,600円 |
+| 96GB | 24コア | 100GB | `g2l-t-c24m96` | 53,900円 |
+| 128GB | 40コア | 100GB | `g2l-t-c40m128` | 72,600円 |
+
+### Linux まとめトク（前払い）
+
+契約期間は 1・3・6・12・24・36 か月。期間分を一括前払いし、途中解約不可。下の額は「更新時」の月額（契約更新後も続く価格）。初回契約には期間限定のキャンペーン割引（2026-10-01 まで）が別に付く。
+
+| プラン | フレーバー名 | 1ヶ月 | 3ヶ月 | 6ヶ月 | 12ヶ月 | 24ヶ月 | 36ヶ月 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 512MB | `g2l-p-c1m512` | 460円 | 400円 | 382円 | 353円 | 341円 | 326円 |
+| 1GB | `g2l-p-c2m1` | 763円 | 666円 | 634円 | 588円 | 568円 | 542円 |
+| 2GB | `g2l-p-c3m2` | 1,259円 | 1,106円 | 1,055円 | 980円 | 947円 | 903円 |
+| 4GB | `g2l-p-c4m4` | 2,189円 | 1,929円 | 1,841円 | 1,791円 | 1,741円 | 1,691円 |
+| 12GB | `g2l-p-c6m12` | 4,389円 | 3,865円 | 3,689円 | 3,591円 | 3,391円 | 3,192円 |
+| 24GB | `g2l-p-c8m24` | 9,746円 | 8,573円 | 8,183円 | 7,791円 | 7,491円 | 7,191円 |
+| 48GB | `g2l-p-c12m48` | 22,099円 | 20,988円 | 19,883円 | 19,491円 | 18,991円 | 18,491円 |
+| 96GB | `g2l-p-c24m96` | 44,198円 | 41,984円 | 39,773円 | 38,991円 | 38,491円 | 37,991円 |
+| 128GB | `g2l-p-c40m128` | 58,927円 | 55,976円 | 53,030円 | 51,987円 | 51,321円 | 50,654円 |
+
+### 旧メモリプラン（8〜64 GB、2025 年 3 月の刷新で 12〜96 GB に置き換わったもの。既存サーバー向け）
+
+| プラン | CPU | フレーバー名（時間課金 / まとめトク） | 時間課金の月額上限 | まとめトクの月額（期間によらず同額） |
+| --- | --- | --- | --- | --- |
+| 8GB | 6コア | `g2l-t-c6m8` / `g2l-p-c6m8` | 8,083円 | 4,828円 |
+| 16GB | 8コア | `g2l-t-c8m16` / `g2l-p-c8m16` | 15,730円 | 10,721円 |
+| 32GB | 12コア | `g2l-t-c12m32` / `g2l-p-c12m32` | 31,460円 | 24,309円 |
+| 64GB | 24コア | `g2l-t-c24m64` / `g2l-p-c24m64` | 59,290円 | 48,618円 |
+
+出典: 料金ページがリンクする旧プランの仕様書 https://vps.conoha.jp/pdf/vswj020-old/conoha_spec_ja.pdf（まとめトクは期間の合計額で載っており、月あたりに直すと同額）。
+
+### DB サーバー（時間課金、月額上限）
+
+| ディスク | フレーバー名 | 月額上限 |
+| --- | --- | --- |
+| 10GB | `g2d-t-c1m1d10` | 798円 |
+| 30GB | `g2d-t-c1m2d30` | 2,637円 |
+| 60GB | `g2d-t-c2m4d60` | 5,553円 |
+| 120GB | `g2d-t-c4m8d120` | 12,124円 |
+| 240GB | `g2d-t-c6m16d240` | 25,168円 |
+| 480GB | `g2d-t-c8m32d480` | 53,482円 |
+| 1,000GB | `g2d-t-c16m64d1000` | 106,722円 |
+
+### Windows Server 時間課金（月額上限）
+
+| プラン | CPU | フレーバー名 | 月額上限 |
+| --- | --- | --- | --- |
+| 1GB | 2コア | `g2w-t-c2m1` | 1,392円 |
+| 2GB | 3コア | `g2w-t-c3m2` | 2,530円 |
+| 4GB | 4コア | `g2w-t-c4m4` | 4,939円 |
+| 8GB | 6コア | `g2w-t-c6m8` | 9,746円 |
+| 16GB | 8コア | `g2w-t-c8m16` | 18,348円 |
+| 32GB | 12コア | `g2w-t-c12m32` | 37,191円 |
+| 64GB | 24コア | `g2w-t-c24m64` | 75,647円 |
+
+### Windows Server まとめトク（前払い、更新時の月額）
+
+契約期間は 3・6・12・24・36 か月（1 か月はない）。初回契約のキャンペーン割引（2026-10-23 まで）は別。
+
+| プラン | フレーバー名 | 3ヶ月 | 6ヶ月 | 12ヶ月 | 24ヶ月 | 36ヶ月 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1GB | `g2w-p-c2m1` | 1,368円 | 1,323円 | 1,267円 | 1,253円 | 1,239円 |
+| 2GB | `g2w-p-c3m2` | 2,468円 | 2,404円 | 2,316円 | 2,303円 | 2,277円 |
+| 4GB | `g2w-p-c4m4` | 4,807円 | 4,681円 | 4,517円 | 4,504円 | 4,491円 |
+| 8GB | `g2w-p-c6m8` | 9,614円 | 9,488円 | 8,919円 | 8,894円 | 8,855円 |
+| 16GB | `g2w-p-c8m16` | 18,029円 | 17,710円 | 16,813円 | 16,762円 | 16,698円 |
+| 32GB | `g2w-p-c12m32` | 36,685円 | 36,053円 | 34,092円 | 34,029円 | 33,902円 |
+| 64GB | `g2w-p-c24m64` | 74,635円 | 73,370円 | 69,322円 | 68,943円 | 68,310円 |
+
+Windows Server のライセンス: RDS SAL（リモートデスクトップ）1 ユーザー 1,386円/月、Microsoft Office SAL（Office 2021 Professional Plus）4,312円/月。
+
+### オプション（月額。時間課金あり、月額上限まで）
+
+| オプション | Terraform での表し方 | 料金 |
+| --- | --- | --- |
+| 追加 SSD | `conohavps_volume`（`volume_type = "c3j1-ds02-add"`、`size`） | 200GB 3,025円、500GB 5,445円、1,000GB 8,954円、5,000GB 44,770円、10,000GB 89,540円 |
+| ブートストレージ容量追加 | `conohavps_volume`（`volume_type = "c3j1-ds02-boot"`、`size` 200 か 500） | +100GB（200GB ブート）1,513円、+400GB（500GB ブート）4,356円。プランに 100GB（512MB プランは 30GB）が含まれる |
+| 追加 IP | `conohavps_additional_ip`（`ip_count` 1〜16） | 1 個 424円 |
+| ロードバランサー | `conohavps_lb_loadbalancer`（リスナー・プール・メンバー・ヘルスモニターは無料） | 1,210円 |
+| イメージ保存 | `conohavps_image_quota`（`image_size_gb` は 550 以上、500 刻み） | 50GB まで無料、追加 500GB ごとに 1,650円。ボリュームのスナップショットもこの容量を使う |
+| 自動バックアップ | `conohavps_instance_autobackup`（`retention` 14〜30 日） | バックアップ容量 100GB 363円、200GB 847円、300GB 1,210円、500GB 2,057円、600GB 2,420円、700GB 2,904円。14 世代を超える 1 世代ごとに 100GB あたり 66円 |
+| ネットワーク帯域拡張（100 → 300 Mbps） | ポートの `qos_policy_id` に QoS ポリシー `global-i_300000-o_300000` の ID（`conohavps_qos_policy` データソースで名前から引く）。サーバー自身のポートは API からは変えられない | 9,900円 |
+| オブジェクトストレージ | `conohavps_objectstorage_quota`（`quota_gb` は 100 刻み）。コンテナ（`conohavps_objectstorage_container`）は無料 | 100GB ごとに 545円。リクエスト・転送は無料 |
+| ローカルネットワーク・DNS・セキュリティグループ・SSH 鍵・サブユーザー | `conohavps_network` / `conohavps_subnet` / `conohavps_port` / `conohavps_dns_domain` / `conohavps_dns_record` / `conohavps_securitygroup` / `conohavps_keypair` / `conohavps_subuser` ほか | 無料 |
+
+### QoS ポリシー（ネットワーク帯域）
+
+ConoHa が公開する 5 つのポリシー（API: QoS ポリシー一覧取得）。有料なのは 300 Mbps だけ。
+
+| ポリシー名 | 帯域 | 課金 |
+| --- | --- | --- |
+| `global-i_100000-o_100000` | 100 Mbps | 既定、無料 |
+| `global-i_300000-o_300000` | 300 Mbps | 有料（ネットワーク帯域拡張 9,900円/月）。タグ `billing_flag=true` |
+| `global-i_512-o_512` | 512 kbps | 制限用、無料 |
+| `local-i_1000000-o_1000000` | 1 Gbps | ローカルネットワーク用、無料 |
+| `global-i_1000000-o_1000000` | 1 Gbps | GPU サーバー用、無料 |
+
+## 使い方
+
+- ビルドして `dev_overrides` で使う手順、テスト、コントリビュートは README.md。
+- 各リソースの属性は docs/resources/、データソースは docs/data-sources/、HCL の例は examples/。
+- 料金を読む道具: https://github.com/O6lvl4/archgopher（Terraform からこのプロバイダのリソースを読み、上の価格で月額を出す）。
