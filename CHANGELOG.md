@@ -1,5 +1,9 @@
 ## Unreleased (Aid-On fork)
 
+DOCS:
+
+* `llms.txt` summarizes the resources, the flavor names and ConoHa's prices (hourly, prepaid by term, Windows, options, QoS policies) as read from the pricing pages on 2026-09-28, since ConoHa's own llms.txt lists the pre-March-2025 hourly prices under the new plan names
+
 FEATURES:
 
 * **New Data Source:** `conohavps_flavor` looks up a flavor (server plan) by name, such as `g2l-t-c4m4`
