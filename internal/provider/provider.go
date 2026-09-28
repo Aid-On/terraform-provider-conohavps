@@ -179,5 +179,10 @@ func (p *conohaProvider) Resources(_ context.Context) []func() resource.Resource
 		r.NewSecurityGroupResource,
 		r.NewSecurityGroupRuleResource,
 		r.NewVolumeResource,
+		r.NewLBLoadBalancerResource,
+		r.NewLBListenerResource,
+		r.NewLBPoolResource,
+		r.NewLBMemberResource,
+		r.NewLBHealthMonitorResource,
 	}
 }

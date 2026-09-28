@@ -1,0 +1,24 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Load Balancer"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/loadbalancer/member/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Member can be imported using the ID of its pool and its own `id`, separated by a slash: `<pool_id>/<member_id>` .
+
+For example:
+
+{{ codefile "shell" "examples/resources/loadbalancer/member/import.sh" }}

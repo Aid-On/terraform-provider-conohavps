@@ -1,0 +1,24 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Load Balancer"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/loadbalancer/pool/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Pool can be imported using its `id` .
+
+For example:
+
+{{ codefile "shell" "examples/resources/loadbalancer/pool/import.sh" }}

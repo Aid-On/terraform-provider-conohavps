@@ -1,0 +1,39 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Load Balancer"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/loadbalancer/health_monitor/main.tf" }}
+
+An `HTTP` or `HTTPS` health monitor also needs `url_path` and `expected_codes`:
+
+```terraform
+resource "conohavps_lb_health_monitor" "http" {
+  pool_id        = conohavps_lb_pool.pool_1.id
+  name           = "tf-example-monitor-http"
+  type           = "HTTP"
+  delay          = 10
+  timeout        = 5
+  max_retries    = 3
+  url_path       = "/health"
+  expected_codes = "200"
+}
+```
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Health monitor can be imported using its `id` .
+
+For example:
+
+{{ codefile "shell" "examples/resources/loadbalancer/health_monitor/import.sh" }}
