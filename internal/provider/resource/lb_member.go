@@ -72,7 +72,7 @@ func (r *lbMemberResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			// ドキュメントの更新 API は admin_state_up しか変えられないため、名前も作り直しで変える
+			// 仕様の更新 API（UpdateMemberReq）は admin_state_up しか変えられないため、名前も作り直しで変える
 			"name": schema.StringAttribute{
 				MarkdownDescription: "The name of the member. The name length needs to be between 1 and 255. Changing this creates a new member.",
 				Required:            true,
@@ -110,7 +110,8 @@ func (r *lbMemberResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Default:             booldefault.StaticBool(true),
 			},
 			"weight": schema.Int64Attribute{
-				MarkdownDescription: "The weight of the member.",
+				// 仕様の追加・更新の要求に weight は無く、応答で読むだけ
+				MarkdownDescription: "The weight of the member in the balancing algorithm. The API does not accept this value on create or update, so it is read only.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),

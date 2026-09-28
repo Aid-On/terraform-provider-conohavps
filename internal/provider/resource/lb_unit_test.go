@@ -129,6 +129,11 @@ func TestLBStack(t *testing.T) {
 					statecheck.ExpectKnownValue("conohavps_lb_loadbalancer.main", tfjsonpath.New("vip_address"), knownvalue.StringExact("203.0.113.100")),
 					statecheck.ExpectKnownValue("conohavps_lb_loadbalancer.main", tfjsonpath.New("operating_status"), knownvalue.StringExact("ONLINE")),
 					statecheck.ExpectKnownValue("conohavps_lb_listener.main", tfjsonpath.New("protocol_port"), knownvalue.Int64Exact(80)),
+					statecheck.ExpectKnownValue("conohavps_lb_listener.main", tfjsonpath.New("connection_limit"), knownvalue.Int64Exact(-1)),
+					statecheck.ExpectKnownValue("conohavps_lb_loadbalancer.main", tfjsonpath.New("admin_state_up"), knownvalue.Bool(true)),
+					statecheck.ExpectKnownValue("conohavps_lb_listener.main", tfjsonpath.New("admin_state_up"), knownvalue.Bool(true)),
+					statecheck.ExpectKnownValue("conohavps_lb_pool.main", tfjsonpath.New("admin_state_up"), knownvalue.Bool(true)),
+					statecheck.ExpectKnownValue("conohavps_lb_health_monitor.main", tfjsonpath.New("admin_state_up"), knownvalue.Bool(true)),
 					statecheck.ExpectKnownValue("conohavps_lb_member.web1", tfjsonpath.New("admin_state_up"), knownvalue.Bool(true)),
 					statecheck.ExpectKnownValue("conohavps_lb_member.web1", tfjsonpath.New("weight"), knownvalue.Int64Exact(1)),
 					statecheck.ExpectKnownValue("conohavps_lb_member.web2", tfjsonpath.New("admin_state_up"), knownvalue.Bool(false)),
@@ -179,6 +184,11 @@ func TestLBStack(t *testing.T) {
 					statecheck.ExpectKnownValue("conohavps_lb_pool.main", tfjsonpath.New("name"), knownvalue.StringExact("pool-renamed")),
 					statecheck.ExpectKnownValue("conohavps_lb_member.web2", tfjsonpath.New("admin_state_up"), knownvalue.Bool(true)),
 					statecheck.ExpectKnownValue("conohavps_lb_health_monitor.main", tfjsonpath.New("name"), knownvalue.StringExact("monitor-renamed")),
+					// 明示した url_path と expected_codes は名前の更新で変わらない
+					statecheck.ExpectKnownValue("conohavps_lb_health_monitor.main", tfjsonpath.New("url_path"), knownvalue.StringExact("/health")),
+					// リスナーの default_pool_id は、プールの作成で API が設定した値を更新の後に読み直している
+					statecheck.CompareValuePairs("conohavps_lb_listener.main", tfjsonpath.New("default_pool_id"),
+						"conohavps_lb_pool.main", tfjsonpath.New("id"), compare.ValuesSame()),
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					func(s *terraform.State) error {
@@ -200,6 +210,23 @@ func TestLBStack(t *testing.T) {
 					f.expectBodies(t, "PUT", "/healthmonitors/", map[string]any{"healthmonitor": map[string]any{"name": "monitor-renamed"}}),
 					f.expectBodies(t, "PUT", "/pools/pool-3/members/", map[string]any{"member": map[string]any{"admin_state_up": true}}),
 				),
+			},
+			// Terraform の外で変えた名前と有効状態は、読み取りで差分として現れ、その場の更新で戻る
+			{
+				PreConfig: func() {
+					f.setField(ids["lb_listener"], "name", "changed-outside")
+					f.setField(ids["lb_member"], "admin_state_up", false)
+				},
+				Config: renamed.render(f),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("conohavps_lb_listener.main", plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction("conohavps_lb_member.web2", plancheck.ResourceActionUpdate),
+					plancheck.ExpectResourceAction("conohavps_lb_pool.main", plancheck.ResourceActionNoop),
+				}},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_lb_listener.main", tfjsonpath.New("name"), knownvalue.StringExact("listener-renamed")),
+					statecheck.ExpectKnownValue("conohavps_lb_member.web2", tfjsonpath.New("admin_state_up"), knownvalue.Bool(true)),
+				},
 			},
 			// メンバーのいるプールのバランシング方式は API が拒否する
 			{
@@ -243,6 +270,8 @@ func TestLBStack(t *testing.T) {
 					return nil
 				},
 			},
+			// リスナーの default_pool_id は後から作ったプールで API が設定するため、読み直してからインポートと比べる
+			{RefreshState: true},
 			// インポート
 			{ResourceName: "conohavps_lb_loadbalancer.main", ImportState: true, ImportStateVerify: true},
 			{ResourceName: "conohavps_lb_listener.main", ImportState: true, ImportStateVerify: true},
@@ -282,6 +311,105 @@ func TestLBStack(t *testing.T) {
 	}
 }
 
+// ヘルスモニタの url_path と expected_codes は仕様では省略できる. 省いた HTTP では API の既定値を読み、
+// 名前の更新では引き継ぎ、作り直しでは新しい既定値を読み、HTTP 以外（UDP-CONNECT）では null にする.
+func TestLBHealthMonitorDefaults(t *testing.T) {
+	f := newLBFake(t)
+	config := func(monitor string) string {
+		return f.s.ProviderConfig() + `
+resource "conohavps_lb_loadbalancer" "main" {
+  name = "lb"
+}
+
+resource "conohavps_lb_listener" "main" {
+  name            = "listener"
+  protocol        = "UDP"
+  protocol_port   = 53
+  loadbalancer_id = conohavps_lb_loadbalancer.main.id
+}
+
+resource "conohavps_lb_pool" "main" {
+  name         = "pool"
+  protocol     = "UDP"
+  lb_algorithm = "ROUND_ROBIN"
+  listener_id  = conohavps_lb_listener.main.id
+}
+
+resource "conohavps_lb_health_monitor" "main" {
+  pool_id     = conohavps_lb_pool.main.id
+  max_retries = 3
+  timeout     = 5
+` + monitor + "}\n"
+	}
+	monitorValues := func(urlPath, expectedCodes knownvalue.Check) []statecheck.StateCheck {
+		return []statecheck.StateCheck{
+			statecheck.ExpectKnownValue("conohavps_lb_health_monitor.main", tfjsonpath.New("url_path"), urlPath),
+			statecheck.ExpectKnownValue("conohavps_lb_health_monitor.main", tfjsonpath.New("expected_codes"), expectedCodes),
+		}
+	}
+	action := func(a plancheck.ResourceActionType) resource.ConfigPlanChecks {
+		return resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+			plancheck.ExpectResourceAction("conohavps_lb_health_monitor.main", a),
+		}}
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: fakeapi.Factories,
+		Steps: []resource.TestStep{
+			// expected_codes を省くと API の既定値が入る
+			{
+				Config: config(`  name     = "m"
+  type     = "HTTP"
+  delay    = 10
+  url_path = "/health"
+`),
+				ConfigStateChecks: monitorValues(knownvalue.StringExact("/health"), knownvalue.StringExact("200")),
+				Check: f.expectLastBody(t, "POST", "/healthmonitors", map[string]any{"healthmonitor": map[string]any{
+					"name": "m", "pool_id": "pool-3", "type": "HTTP", "delay": float64(10), "timeout": float64(5),
+					"max_retries": float64(3), "url_path": "/health",
+				}}),
+			},
+			// 名前の更新では、既定値の入った expected_codes を差分にしない
+			{
+				Config: config(`  name     = "m2"
+  type     = "HTTP"
+  delay    = 10
+  url_path = "/health"
+`),
+				ConfigPlanChecks:  action(plancheck.ResourceActionUpdate),
+				ConfigStateChecks: monitorValues(knownvalue.StringExact("/health"), knownvalue.StringExact("200")),
+			},
+			// url_path を外して delay を変えると作り直しになり、新しいヘルスモニタの既定値を読む
+			{
+				Config: config(`  name  = "m2"
+  type  = "HTTP"
+  delay = 20
+`),
+				ConfigPlanChecks:  action(plancheck.ResourceActionReplace),
+				ConfigStateChecks: monitorValues(knownvalue.StringExact("/"), knownvalue.StringExact("200")),
+				Check: f.expectLastBody(t, "POST", "/healthmonitors", map[string]any{"healthmonitor": map[string]any{
+					"name": "m2", "pool_id": "pool-3", "type": "HTTP", "delay": float64(20), "timeout": float64(5),
+					"max_retries": float64(3),
+				}}),
+			},
+			// UDP-CONNECT に変えると作り直しになり、url_path と expected_codes は送らず null になる
+			{
+				Config: config(`  name  = "m2"
+  type  = "UDP-CONNECT"
+  delay = 20
+`),
+				ConfigPlanChecks:  action(plancheck.ResourceActionReplace),
+				ConfigStateChecks: monitorValues(knownvalue.Null(), knownvalue.Null()),
+				Check: f.expectLastBody(t, "POST", "/healthmonitors", map[string]any{"healthmonitor": map[string]any{
+					"name": "m2", "pool_id": "pool-3", "type": "UDP-CONNECT", "delay": float64(20), "timeout": float64(5),
+					"max_retries": float64(3),
+				}}),
+			},
+			{ResourceName: "conohavps_lb_health_monitor.main", ImportState: true, ImportStateVerify: true},
+		},
+	})
+}
+
 // 追加したロードバランサーが ERROR になったら、待機を打ち切って失敗させる.
 func TestLBLoadBalancerErrorStatus(t *testing.T) {
 	f := newLBFake(t)
@@ -314,17 +442,18 @@ timeout = 10`), `timeout \(10\) must be less than delay \(10\)`},
 		{"delay out of range", monitor(`type = "TCP"
 delay = 181
 timeout = 10`), `delay value must be between 1 and 180`},
-		{"HTTP without url_path", monitor(`type = "HTTP"
-delay = 10
-timeout = 5
-expected_codes = "200"`), `url_path is required when type is HTTP`},
 		{"TCP with expected_codes", monitor(`type = "TCP"
 delay = 10
 timeout = 5
 expected_codes = "200"`), `expected_codes can only be set when type is HTTP or HTTPS`},
-		{"monitor type", monitor(`type = "UDP-CONNECT"
+		// 仕様の type は UDP ではなく UDP-CONNECT
+		{"monitor type", monitor(`type = "UDP"
 delay = 10
 timeout = 5`), `type value must be one of`},
+		{"PING with url_path", monitor(`type = "PING"
+delay = 10
+timeout = 5
+url_path = "/"`), `url_path can only be set when type is HTTP or HTTPS`},
 		{"listener protocol", f.s.ProviderConfig() + `resource "conohavps_lb_listener" "x" {
   name = "l"
   protocol = "HTTP"

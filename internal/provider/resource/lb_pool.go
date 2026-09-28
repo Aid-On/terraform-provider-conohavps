@@ -40,6 +40,7 @@ type lbPoolResourceModel struct {
 	Protocol        types.String `tfsdk:"protocol"`
 	ListenerID      types.String `tfsdk:"listener_id"`
 	LoadBalancerID  types.String `tfsdk:"loadbalancer_id"`
+	AdminStateUp    types.Bool   `tfsdk:"admin_state_up"`
 	OperatingStatus types.String `tfsdk:"operating_status"`
 }
 
@@ -100,6 +101,7 @@ func (r *lbPoolResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"admin_state_up": lbReadOnlyAdminStateUp("pool"),
 			"operating_status": schema.StringAttribute{
 				MarkdownDescription: "The operating status of the pool.",
 				Computed:            true,
@@ -246,5 +248,6 @@ func (m *lbPoolResourceModel) fill(p *service.LBPool) {
 		m.ListenerID = types.StringValue(id)
 	}
 	m.LoadBalancerID = types.StringValue(p.LoadBalancerID())
+	m.AdminStateUp = types.BoolValue(p.AdminStateUp)
 	m.OperatingStatus = types.StringValue(p.OperatingStatus)
 }

@@ -64,7 +64,7 @@ resource "conohavps_lb_member" "member_2" {
 
 - `id` (String) The ID of the member.
 - `operating_status` (String) The operating status of the member.
-- `weight` (Number) The weight of the member.
+- `weight` (Number) The weight of the member in the balancing algorithm. The API does not accept this value on create or update, so it is read only.
 
 ## Import
 

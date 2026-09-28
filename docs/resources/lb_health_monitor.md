@@ -40,7 +40,7 @@ resource "conohavps_lb_health_monitor" "tcp" {
 }
 ```
 
-An `HTTP` or `HTTPS` health monitor also needs `url_path` and `expected_codes`:
+An `HTTP` or `HTTPS` health monitor can also set `url_path` and `expected_codes`. When they are omitted, the API's defaults are used and read back into the state:
 
 ```terraform
 resource "conohavps_lb_health_monitor" "http" {
@@ -65,15 +65,16 @@ resource "conohavps_lb_health_monitor" "http" {
 - `name` (String) The name of the health monitor. The name length needs to be between 1 and 255. Changing this value updates the name in place.
 - `pool_id` (String) The ID of the pool to monitor. Changing this creates a new health monitor.
 - `timeout` (Number) How long to wait for a check response, in seconds (1-180). Must be less than `delay`. Changing this creates a new health monitor.
-- `type` (String) The protocol used for the health check. Allowed values: `TCP`, `UDP`, `PING`, `HTTP`, `HTTPS`. `HTTP` and `HTTPS` put load on the members, so `TCP` or `PING` is recommended for few or small members. Changing this creates a new health monitor.
+- `type` (String) The protocol used for the health check. Allowed values: `TCP`, `UDP-CONNECT`, `PING`, `HTTP`, `HTTPS`. `HTTP` and `HTTPS` put load on the members, so `TCP` or `PING` is recommended for few or small members. Changing this creates a new health monitor.
 
 ### Optional
 
-- `expected_codes` (String) The HTTP status code(s) expected in the response. Required when `type` is `HTTP` or `HTTPS`, and not allowed otherwise. Changing this creates a new health monitor.
-- `url_path` (String) The path to request. Required when `type` is `HTTP` or `HTTPS`, and not allowed otherwise. Changing this creates a new health monitor.
+- `expected_codes` (String) The HTTP status code(s) expected in the response. Only allowed when `type` is `HTTP` or `HTTPS`; when omitted, the API's default is used. `null` for other types. Changing this creates a new health monitor.
+- `url_path` (String) The path to request. Only allowed when `type` is `HTTP` or `HTTPS`; when omitted, the API's default is used. `null` for other types. Changing this creates a new health monitor.
 
 ### Read-Only
 
+- `admin_state_up` (Boolean) Whether the health monitor is administratively up. The API does not accept this value on create or update, so it is read only.
 - `id` (String) The ID of the health monitor.
 - `operating_status` (String) The operating status of the health monitor.
 
