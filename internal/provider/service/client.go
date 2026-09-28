@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack"
@@ -17,6 +18,7 @@ type ConohaClient struct {
 	BlockStorageClient *gophercloud.ServiceClient
 	ComputeClient      *gophercloud.ServiceClient
 	NetworkClient      *gophercloud.ServiceClient
+	ImageClient        *gophercloud.ServiceClient
 	Token              string
 	TenantID           string
 	IdentityEndpoint   string
@@ -81,5 +83,25 @@ func (c *ConohaClient) initServiceClients(ctx context.Context) error {
 	}
 	c.NetworkClient.ProviderClient = c.ProviderClient
 
+	if c.ImageClient, err = openstack.NewImageV2(ctx, c.ProviderClient, gophercloud.EndpointOpts{
+		Region: c.Region,
+	}); err != nil {
+		tflog.Error(ctx, "Failed to initialize ImageV2 client.", map[string]any{"error": err.Error()})
+		return err
+	}
+	c.ImageClient.ProviderClient = c.ProviderClient
+	c.ImageClient.ResourceBase = imageResourceBase(c.ImageClient.Endpoint)
+
 	return nil
+}
+
+// イメージ API のリクエスト先を決める.
+// gophercloud はカタログのエンドポイントに "v2/" を付け足すため、
+// エンドポイントがすでに /v2 で終わる場合に二重にならないようにする.
+func imageResourceBase(endpoint string) string {
+	base := strings.TrimSuffix(endpoint, "/")
+	if strings.HasSuffix(base, "/v2") {
+		return base + "/"
+	}
+	return base + "/v2/"
 }

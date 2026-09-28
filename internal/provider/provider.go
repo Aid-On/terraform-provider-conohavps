@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 
+	d "github.com/gmo-internet/terraform-provider-conohavps/internal/provider/datasource"
 	r "github.com/gmo-internet/terraform-provider-conohavps/internal/provider/resource"
 	"github.com/gmo-internet/terraform-provider-conohavps/internal/provider/service"
 	"github.com/gophercloud/gophercloud/v2"
@@ -161,10 +162,14 @@ func (p *conohaProvider) Configure(ctx context.Context, req provider.ConfigureRe
 	}
 
 	resp.ResourceData = conohaClient
+	resp.DataSourceData = conohaClient
 }
 
 func (p *conohaProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{
+		d.NewFlavorDataSource,
+		d.NewImageDataSource,
+	}
 }
 
 func (p *conohaProvider) Resources(_ context.Context) []func() resource.Resource {
