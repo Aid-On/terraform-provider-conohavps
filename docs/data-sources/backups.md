@@ -1,5 +1,5 @@
 ---
-page_title: "conohavps_backups Data Source - conohavps"
+page_title: "conohavps_backups Data Source - terraform-provider-conohavps"
 subcategory: "Volume"
 description: |-
   Lists the backups taken by auto-backup, newest first. Use a backup's id as backup_id of conohavps_volume to restore it.

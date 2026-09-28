@@ -1,5 +1,5 @@
 ---
-page_title: "conohavps_volume_attachment Resource - conohavps"
+page_title: "conohavps_volume_attachment Resource - terraform-provider-conohavps"
 subcategory: "Volume"
 description: |-
   Attaches an additional storage volume to a server. The server must be stopped when the volume is attached and detached, and only one additional storage volume can be attached to a server. A boot storage volume cannot be detached.

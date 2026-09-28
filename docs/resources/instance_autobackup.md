@@ -1,5 +1,5 @@
 ---
-page_title: "conohavps_instance_autobackup Resource - conohavps"
+page_title: "conohavps_instance_autobackup Resource - terraform-provider-conohavps"
 subcategory: "Volume"
 description: |-
   Enables auto-backup of the volumes attached to a server. The boot storage volume and, when attached, the additional storage volume are backed up. Destroying this resource disables auto-backup of the server.

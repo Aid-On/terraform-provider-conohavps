@@ -1,5 +1,5 @@
 ---
-page_title: "conohavps_volume_snapshot Resource - conohavps"
+page_title: "conohavps_volume_snapshot Resource - terraform-provider-conohavps"
 subcategory: "Volume"
 description: |-
   Manages a snapshot of a volume. Only one snapshot can be created, and ConoHa deletes a snapshot automatically 24 hours after it is created; after that the snapshot is removed from the state and the next apply creates it again. The API has no update operation, so every change recreates the snapshot.

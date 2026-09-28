@@ -4,18 +4,28 @@
 
 # Terraform ConoHa VPS Provider
 
+> [!NOTE]
+> これは [gmo-internet/terraform-provider-conohavps](https://github.com/gmo-internet/terraform-provider-conohavps) を Aid-On が fork し、ConoHa VPS（Ver.3.0）の公開 API が提供する範囲のリソースとデータソースを追加したものです（Apache License 2.0）。追加分は GMO インターネット株式会社の公式提供ではありません。変更点は [CHANGELOG.md](CHANGELOG.md) を参照してください。
+
 - Terraform ウェブサイト: https://developer.hashicorp.com/terraform
 - ドキュメント: https://registry.terraform.io/providers/gmo-internet/conohavps/latest/docs
 
 Terraform ConoHa VPS Provider は、Terraform が [ConoHa VPS](https://vps.conoha.jp/) 上のリソースを管理できるようにするプラグインです。
 
-現在、下記リソースの管理に対応しています。
+現在、下記リソースの管理に対応しています（★ はこの fork で追加したもの）。
 
-- サーバー
-- SSHキーペア
-- ボリューム
-- セキュリティグループ
-- セキュリティグループルール
+| 分類 | リソース | データソース |
+| --- | --- | --- |
+| サーバー | サーバー、SSHキーペア、★ポートの接続、★自動バックアップ | ★フレーバー（プラン）、★イメージ |
+| ボリューム | ボリューム、★ボリュームの接続、★スナップショット | ★バックアップ一覧 |
+| ネットワーク | セキュリティグループ、セキュリティグループルール、★ローカルネットワーク、★サブネット、★ポート、★追加IP | ★QoS ポリシー |
+| ロードバランサー | ★ロードバランサー、★リスナー、★プール、★メンバー、★ヘルスモニター | |
+| DNS | ★ドメイン、★レコード | ★ドメイン |
+| オブジェクトストレージ | ★コンテナ、★容量 | |
+| イメージ | ★イメージ保存容量 | ★イメージ保存の使用量 |
+| アイデンティティ | ★ロール、★サブユーザー、★S3 互換のアクセスキー | ★パーミッション一覧 |
+
+追加分は、公開 API のドキュメントに沿って実装し、偽の API に対するテストで確認しています。実際の API での確認は順次行います。
 
 詳細については、ドキュメントを参照してください。
 
@@ -29,8 +39,21 @@ Terraform ConoHa VPS Provider は、Terraform が [ConoHa VPS](https://vps.conoh
 
 ドキュメントを参照してください。
 
-> [!IMPORTANT]
-> 本ソフトウェアは現在ベータ版につきデータソースは提供しておりません。リソースの作成に必要なパラメータについては [公開API(ConoHa VPS Ver.3.0)](https://doc.conoha.jp/reference/api-vps3) より取得ください。
+この fork は Terraform Registry に公開していないため、手元でビルドして `dev_overrides` で使います。
+
+```sh
+go install .
+cat >> ~/.terraformrc <<'X'
+provider_installation {
+  dev_overrides {
+    "registry.terraform.io/gmo-internet/conohavps" = "/Users/<you>/go/bin"
+  }
+  direct {}
+}
+X
+```
+
+フレーバーとイメージの ID は、データソース（`conohavps_flavor`、`conohavps_image`）で名前から引けます。
 
 ## 要件
 
