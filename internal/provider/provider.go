@@ -200,5 +200,10 @@ func (p *conohaProvider) Resources(_ context.Context) []func() resource.Resource
 		r.NewPortResource,
 		r.NewAdditionalIPResource,
 		r.NewPortAttachmentResource,
+		r.NewLBLoadBalancerResource,
+		r.NewLBListenerResource,
+		r.NewLBPoolResource,
+		r.NewLBMemberResource,
+		r.NewLBHealthMonitorResource,
 	}
 }
