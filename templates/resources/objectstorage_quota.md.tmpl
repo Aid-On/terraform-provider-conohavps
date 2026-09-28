@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Object Storage"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/objectstorage/quota/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+The object storage quota can be imported using the tenant ID of the provider.
+
+{{ codefile "shell" "examples/resources/objectstorage/quota/import.sh" }}
