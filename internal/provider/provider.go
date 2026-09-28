@@ -170,6 +170,7 @@ func (p *conohaProvider) DataSources(_ context.Context) []func() datasource.Data
 		d.NewFlavorDataSource,
 		d.NewImageDataSource,
 		d.NewBackupsDataSource,
+		d.NewDNSDomainDataSource,
 	}
 }
 
@@ -183,5 +184,7 @@ func (p *conohaProvider) Resources(_ context.Context) []func() resource.Resource
 		r.NewVolumeAttachmentResource,
 		r.NewVolumeSnapshotResource,
 		r.NewInstanceAutoBackupResource,
+		r.NewDNSDomainResource,
+		r.NewDNSRecordResource,
 	}
 }
