@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 
+	d "github.com/gmo-internet/terraform-provider-conohavps/internal/provider/datasource"
 	r "github.com/gmo-internet/terraform-provider-conohavps/internal/provider/resource"
 	"github.com/gmo-internet/terraform-provider-conohavps/internal/provider/service"
 	"github.com/gophercloud/gophercloud/v2"
@@ -161,10 +162,19 @@ func (p *conohaProvider) Configure(ctx context.Context, req provider.ConfigureRe
 	}
 
 	resp.ResourceData = conohaClient
+	resp.DataSourceData = conohaClient
 }
 
 func (p *conohaProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{
+		d.NewFlavorDataSource,
+		d.NewImageDataSource,
+		d.NewBackupsDataSource,
+		d.NewDNSDomainDataSource,
+		d.NewPermissionsDataSource,
+		d.NewImageUsageDataSource,
+		d.NewQoSPolicyDataSource,
+	}
 }
 
 func (p *conohaProvider) Resources(_ context.Context) []func() resource.Resource {
@@ -174,5 +184,26 @@ func (p *conohaProvider) Resources(_ context.Context) []func() resource.Resource
 		r.NewSecurityGroupResource,
 		r.NewSecurityGroupRuleResource,
 		r.NewVolumeResource,
+		r.NewVolumeAttachmentResource,
+		r.NewVolumeSnapshotResource,
+		r.NewInstanceAutoBackupResource,
+		r.NewDNSDomainResource,
+		r.NewDNSRecordResource,
+		r.NewRoleResource,
+		r.NewSubUserResource,
+		r.NewCredentialResource,
+		r.NewObjectStorageContainerResource,
+		r.NewObjectStorageQuotaResource,
+		r.NewImageQuotaResource,
+		r.NewNetworkResource,
+		r.NewSubnetResource,
+		r.NewPortResource,
+		r.NewAdditionalIPResource,
+		r.NewPortAttachmentResource,
+		r.NewLBLoadBalancerResource,
+		r.NewLBListenerResource,
+		r.NewLBPoolResource,
+		r.NewLBMemberResource,
+		r.NewLBHealthMonitorResource,
 	}
 }

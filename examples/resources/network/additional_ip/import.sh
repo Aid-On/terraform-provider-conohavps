@@ -1,0 +1,1 @@
+$ terraform import conohavps_additional_ip.extra {{port_id}}

@@ -1,0 +1,1 @@
+$ terraform import conohavps_dns_record.www {{domain_id}}/{{record_id}}

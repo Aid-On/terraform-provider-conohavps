@@ -57,6 +57,12 @@ func init() {
 		IdentityEndpoint: identityEndpoint,
 	}
 
+	// 受け入れテスト（TF_ACC=1）のときだけ実際の API に認証する.
+	// それ以外では認証しないので、偽の API を使うテストは認証情報なしで同じパッケージで動く.
+	if os.Getenv("TF_ACC") == "" {
+		return
+	}
+
 	err := TestAccClient.Authenticate(context.Background(), authOpts, region)
 	if err != nil {
 		panic(err)

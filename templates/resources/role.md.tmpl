@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Identity"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/identity/role/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Roles can be imported using its `id` .
+
+{{ codefile "shell" "examples/resources/identity/role/import.sh" }}

@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Object Storage"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/objectstorage/container/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Containers can be imported using its `name` .
+
+{{ codefile "shell" "examples/resources/objectstorage/container/import.sh" }}

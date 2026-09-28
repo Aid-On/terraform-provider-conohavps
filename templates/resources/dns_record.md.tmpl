@@ -1,0 +1,24 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "DNS"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/dns/record/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+DNS record can be imported using the ID of its domain and its own `id`, joined by a slash: `<domain_id>/<record_id>` .
+
+For example:
+
+{{ codefile "shell" "examples/resources/dns/record/import.sh" }}

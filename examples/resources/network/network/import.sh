@@ -1,0 +1,1 @@
+$ terraform import conohavps_network.local {{network_id}}

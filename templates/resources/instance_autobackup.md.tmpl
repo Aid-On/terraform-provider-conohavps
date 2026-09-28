@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Volume"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/volume/instance_autobackup/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Auto-backup can be imported using the server ID. The API cannot read back the retention, so it is taken as 14 days unless given as `<instance_id>/<retention>` .
+
+{{ codefile "shell" "examples/resources/volume/instance_autobackup/import.sh" }}
