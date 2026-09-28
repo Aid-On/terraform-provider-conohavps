@@ -8,9 +8,17 @@ resource "conohavps_objectstorage_container" "archive" {
   name = "photos-archive"
 }
 
-# Container published on the web, with object versioning
+# Container published on the web as a static site, with object versioning
 resource "conohavps_objectstorage_container" "photos" {
   name              = "photos"
   versions_location = conohavps_objectstorage_container.archive.name
-  web_publishing    = true
+
+  # Everyone can read the objects; index.html is served for directories
+  container_read = ".r:*"
+  web_index      = "index.html"
+  web_error      = "error.html"
+
+  metadata = {
+    owner = "web-team"
+  }
 }

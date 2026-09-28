@@ -1,6 +1,6 @@
 // イメージ保存容量のリソースと使用量のデータソースの単体テストを提供する.
-// 偽の API を相手に、設定・変更・インポート・削除（50GB に戻す）と、50GB＋500GB 単位の検証、
-// 使用量を下回る変更で API のエラーが返ることを検証する.
+// 偽の API を相手に、設定・変更・インポート・削除（50GB に戻す）と、50GB＋500GB 単位（550GB 以上）の検証、
+// 使用量を下回る変更で API のエラーが返ること、外での変更を差分として検出することを検証する.
 
 package resource_test
 
@@ -212,8 +212,9 @@ func TestImageQuota_DriftOutside(t *testing.T) {
 		ProtoV6ProviderFactories: fakeapi.Factories,
 		Steps: []resource.TestStep{
 			{Config: imageQuotaConfig(f, 550)},
+			// 外で増やされた容量は、その場で戻す
 			{
-				PreConfig: func() { f.with(func(f *fakeImageQuota) { f.sizeGB = 50 }) },
+				PreConfig: func() { f.with(func(f *fakeImageQuota) { f.sizeGB = 1050 }) },
 				Config:    imageQuotaConfig(f, 550),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
@@ -222,21 +223,48 @@ func TestImageQuota_DriftOutside(t *testing.T) {
 				},
 				Check: func(_ *terraform.State) error { return f.expectLastPut("550GB") },
 			},
+			// 無料の 50GB に戻されていれば、足した容量が無いものとして作り直す
+			{
+				PreConfig: func() { f.with(func(f *fakeImageQuota) { f.sizeGB = 50 }) },
+				Config:    imageQuotaConfig(f, 550),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(imageQuotaAddr, plancheck.ResourceActionCreate),
+					},
+				},
+				Check: func(_ *terraform.State) error { return f.expectLastPut("550GB") },
+			},
 		},
 	})
 }
 
-// 50GB＋500GB 単位でない容量は、API を呼ぶ前に弾く.
+// 無料の 50GB のままのアカウントには、インポートする容量が無い.
+func TestImageQuota_ImportDefault(t *testing.T) {
+	f := newFakeImageQuota(t)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: fakeapi.Factories,
+		Steps: []resource.TestStep{{
+			Config:        imageQuotaConfig(f, 550),
+			ResourceName:  imageQuotaAddr,
+			ImportState:   true,
+			ImportStateId: fakeapi.TenantID,
+			ExpectError:   regexp.MustCompile(`Cannot import non-existent remote object`),
+		}},
+	})
+}
+
+// 50GB＋500GB 単位でない容量と、無料分と同じ 50GB 以下の容量は、API を呼ぶ前に弾く.
 func TestImageQuota_InvalidSize(t *testing.T) {
 	f := newFakeImageQuota(t)
 
-	for _, gb := range []int{0, 40, 100, 500, 600} {
+	for _, gb := range []int{0, 40, 50, 100, 500, 600} {
 		t.Run(strconv.Itoa(gb), func(t *testing.T) {
 			resource.UnitTest(t, resource.TestCase{
 				ProtoV6ProviderFactories: fakeapi.Factories,
 				Steps: []resource.TestStep{{
 					Config:      imageQuotaConfig(f, gb),
-					ExpectError: regexp.MustCompile(fmt.Sprintf(`must be 50 plus a multiple of 500 \(at least 50\), got: %d`, gb)),
+					ExpectError: regexp.MustCompile(fmt.Sprintf(`must be 50 plus a multiple of 500 \(at least 550\), got: %d`, gb)),
 				}},
 			})
 		})
