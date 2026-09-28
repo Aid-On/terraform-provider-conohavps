@@ -169,6 +169,7 @@ func (p *conohaProvider) DataSources(_ context.Context) []func() datasource.Data
 	return []func() datasource.DataSource{
 		d.NewFlavorDataSource,
 		d.NewImageDataSource,
+		d.NewQoSPolicyDataSource,
 	}
 }
 
@@ -179,5 +180,10 @@ func (p *conohaProvider) Resources(_ context.Context) []func() resource.Resource
 		r.NewSecurityGroupResource,
 		r.NewSecurityGroupRuleResource,
 		r.NewVolumeResource,
+		r.NewNetworkResource,
+		r.NewSubnetResource,
+		r.NewPortResource,
+		r.NewAdditionalIPResource,
+		r.NewPortAttachmentResource,
 	}
 }

@@ -1,0 +1,24 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Network"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/network/network/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+A network can be imported using its `id` .
+
+For example:
+
+{{ codefile "shell" "examples/resources/network/network/import.sh" }}
