@@ -13,16 +13,19 @@ Manages a DNS record of a domain in ConoHa DNS.
 
 ```terraform
 resource "conohavps_dns_domain" "example" {
-  name  = "example.com."
-  ttl   = 3600
-  email = "hostmaster@example.com"
+  name        = "example.com."
+  ttl         = 3600
+  email       = "hostmaster@example.com"
+  description = "Company website"
 }
 
 resource "conohavps_dns_record" "www" {
-  domain_id = conohavps_dns_domain.example.id
-  name      = "www.example.com."
-  type      = "A"
-  data      = "192.0.2.10"
+  domain_id   = conohavps_dns_domain.example.id
+  name        = "www.example.com."
+  type        = "A"
+  data        = "192.0.2.10"
+  ttl         = 300
+  description = "Web server"
 }
 
 resource "conohavps_dns_record" "mx" {
@@ -52,18 +55,19 @@ resource "conohavps_dns_record" "sip" {
 - `data` (String) The value of the record: an IPv4 address for `A`, an IPv6 address for `AAAA`, a host name ending with a period for `CNAME`, `MX`, `NS` and `SRV` (the target), or text for `TXT`. Changing this value will update the record.
 - `domain_id` (String) The ID of the domain (`conohavps_dns_domain`) the record belongs to. Changing this value will force the record to be recreated.
 - `name` (String) The name of the record: the domain name itself or a name under it, ending with a period (e.g. `example.com.` or `www.example.com.`). Letters are compared case-insensitively. Changing this value will update the record.
-- `type` (String) The type of the record. One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `SRV` and `TXT`. Changing this value will force the record to be recreated.
+- `type` (String) The type of the record. One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `SRV` and `TXT`. Changing this value will update the record.
 
 ### Optional
 
+- `description` (String) A free-text description of the record. Changing this value will update the record.
 - `port` (Number) The port number of the record. Required for `SRV`, and not allowed for other types. Changing this value will update the record.
 - `priority` (Number) The priority of the record. Required for `MX` and `SRV`, and not allowed for other types. Changing this value will update the record.
+- `ttl` (Number) The TTL of the record in seconds. If omitted, ConoHa DNS chooses it, and removing it from the configuration keeps the current value. Changing this value will update the record.
 - `weight` (Number) The weight of the record. Required for `SRV`, and not allowed for other types. Changing this value will update the record.
 
 ### Read-Only
 
 - `id` (String) The ID (UUID) of the record.
-- `ttl` (Number) The TTL of the record in seconds, as set by ConoHa DNS. The API does not accept a TTL for records.
 
 ## Import
 

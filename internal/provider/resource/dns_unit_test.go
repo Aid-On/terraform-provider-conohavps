@@ -1,6 +1,7 @@
 // DNS のドメインとレコードのリソースのテストを提供する.
-// 偽の ConoHa API にドキュメントどおりの DNS API（/v1/domains...）を足し、
+// 偽の ConoHa API に OpenAPI 仕様どおりの DNS API（/v1/domains...）を足し、
 // 作成・更新・作り直し・インポート・削除を、実際の API を使わずに検証する.
+// HTML ドキュメントの形（uuid・domain_uuid・伏せ字のメールアドレス）で返す切り替えも持つ.
 
 package resource_test
 
@@ -29,6 +30,7 @@ type fakeDNS struct {
 	domains map[string]map[string]any            // ドメイン ID → ドメイン
 	records map[string]map[string]map[string]any // ドメイン ID → レコード ID → レコード
 	bodies  []fakeDNSRequest
+	legacy  bool // HTML ドキュメントのレスポンス例の形で返す
 }
 
 type fakeDNSRequest struct {
@@ -61,6 +63,30 @@ func (f *fakeDNS) body(w http.ResponseWriter, r *http.Request) map[string]any {
 	return b
 }
 
+// レスポンスを返す. legacy なら HTML ドキュメントのレスポンス例の形
+// （ID は uuid・domain_uuid、メールアドレスは伏せ字、説明は無し）に直して返す.
+func (f *fakeDNS) write(w http.ResponseWriter, v map[string]any) {
+	if !f.legacy {
+		fakeapi.WriteJSON(w, http.StatusOK, v)
+		return
+	}
+	out := map[string]any{}
+	for k, x := range v {
+		switch k {
+		case "id":
+			out["uuid"] = x
+		case "domain_id":
+			out["domain_uuid"] = x
+		case "email":
+			out["email"] = "******@****.***"
+		case "description":
+		default:
+			out[k] = x
+		}
+	}
+	fakeapi.WriteJSON(w, http.StatusOK, out)
+}
+
 func badRequest(w http.ResponseWriter, msg string) {
 	fakeapi.WriteJSON(w, http.StatusBadRequest, map[string]any{"error": msg})
 }
@@ -91,10 +117,12 @@ func (f *fakeDNS) createDomain(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "name, ttl and email are required")
 		return
 	}
+	desc, _ := b["description"].(string)
 	id := f.s.NewID("domain")
+	// OpenAPI 仕様の DomainBody の形. project_id は HTML ドキュメントのレスポンス例にだけある
 	d := map[string]any{
-		"uuid": id, "name": name, "project_id": fakeapi.TenantID, "serial": 1701912034,
-		"ttl": ttl, "email": email, "created_at": "2023-12-07T01:20:34.840919Z", "updated_at": "2023-12-07T01:20:34.840950Z",
+		"id": id, "name": name, "project_id": fakeapi.TenantID, "serial": 1701912034,
+		"ttl": ttl, "email": email, "description": desc, "created_at": "2023-12-07T01:20:34.840919Z", "updated_at": "2023-12-07T01:20:34.840950Z",
 	}
 	f.domains[id] = d
 	// 実物と同じく SOA と NS のレコードを自動で作る
@@ -104,10 +132,10 @@ func (f *fakeDNS) createDomain(w http.ResponseWriter, r *http.Request) {
 		{"type": "NS", "data": "a.conoha-dns.com."},
 	} {
 		rid := f.s.NewID("record")
-		rec["uuid"], rec["domain_uuid"], rec["name"], rec["ttl"] = rid, id, name, 3600
+		rec["id"], rec["domain_id"], rec["name"], rec["ttl"], rec["priority"], rec["description"] = rid, id, name, 3600, nil, ""
 		f.records[id][rid] = rec
 	}
-	fakeapi.WriteJSON(w, http.StatusOK, d)
+	f.write(w, d)
 }
 
 func (f *fakeDNS) getDomain(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +149,7 @@ func (f *fakeDNS) getDomain(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	fakeapi.WriteJSON(w, http.StatusOK, d)
+	f.write(w, d)
 }
 
 func (f *fakeDNS) updateDomain(w http.ResponseWriter, r *http.Request) {
@@ -143,13 +171,13 @@ func (f *fakeDNS) updateDomain(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "name cannot be updated")
 		return
 	}
-	for _, k := range []string{"ttl", "email"} {
+	for _, k := range []string{"ttl", "email", "description"} {
 		if v, ok := b[k]; ok {
 			d[k] = v
 		}
 	}
 	d["updated_at"] = "2023-12-07T04:19:36.090636Z"
-	fakeapi.WriteJSON(w, http.StatusOK, d)
+	f.write(w, d)
 }
 
 func (f *fakeDNS) deleteDomain(w http.ResponseWriter, r *http.Request) {
@@ -180,13 +208,20 @@ func fakeRecordFields(rec, b map[string]any) string {
 	if v, ok := b["type"].(string); ok {
 		rec["type"] = v
 	}
-	for _, k := range []string{"priority", "weight", "port"} {
+	// priority・ttl は OpenAPI 仕様どおり整数. weight・port は HTML ドキュメントにだけある. null は値を消す
+	for _, k := range []string{"priority", "weight", "port", "ttl"} {
 		if v, ok := b[k]; ok {
-			if _, num := v.(float64); !num {
+			if _, num := v.(float64); !num && (v != nil || k == "ttl") {
 				return k + " must be a number"
 			}
 			rec[k] = v
 		}
+	}
+	if v, ok := b["description"]; ok {
+		if _, str := v.(string); !str {
+			return "description must be a string"
+		}
+		rec["description"] = v
 	}
 	if v, ok := b["data"].(string); ok {
 		switch rec["type"] {
@@ -232,8 +267,9 @@ func (f *fakeDNS) createRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := f.s.NewID("record")
+	// OpenAPI 仕様の RecordBody の形. weight・port は HTML ドキュメントのレスポンス例にだけある
 	rec := map[string]any{
-		"uuid": id, "domain_uuid": did, "priority": nil, "weight": nil, "port": nil, "ttl": 3600,
+		"id": id, "domain_id": did, "priority": nil, "weight": nil, "port": nil, "ttl": 3600, "description": "",
 		"created_at": "2023-12-07T07:58:39.098406Z", "updated_at": "2023-12-07T07:58:39.098447Z",
 	}
 	if msg := fakeRecordFields(rec, b); msg != "" {
@@ -241,7 +277,7 @@ func (f *fakeDNS) createRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.records[did][id] = rec
-	fakeapi.WriteJSON(w, http.StatusOK, rec)
+	f.write(w, rec)
 }
 
 func (f *fakeDNS) record(w http.ResponseWriter, r *http.Request) map[string]any {
@@ -260,7 +296,7 @@ func (f *fakeDNS) getRecord(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if rec := f.record(w, r); rec != nil {
-		fakeapi.WriteJSON(w, http.StatusOK, rec)
+		f.write(w, rec)
 	}
 }
 
@@ -288,7 +324,7 @@ func (f *fakeDNS) updateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	updated["updated_at"] = "2023-12-07T08:57:54.008234Z"
 	f.records[r.PathValue("domain")][r.PathValue("record")] = updated
-	fakeapi.WriteJSON(w, http.StatusOK, updated)
+	f.write(w, updated)
 }
 
 func (f *fakeDNS) deleteRecord(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +352,7 @@ const (
 )
 
 // 本文が want のキーと値をすべて持ち、forbidden のキーを持たないことを確かめる.
+// want の値が nil なら、そのキーを null で送っていることを確かめる. want に type があれば、そのタイプの本文だけを見る.
 func (f *fakeDNS) expectBody(method, pathPattern, name string, want map[string]any, forbidden ...string) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		f.mu.Lock()
@@ -325,7 +362,14 @@ func (f *fakeDNS) expectBody(method, pathPattern, name string, want map[string]a
 			if b.Method != method || !pathMatches(b.Path, pathPattern) || (name != "" && b.Body["name"] != name) {
 				continue
 			}
+			// 同じ名前のレコードが複数あるときは、want のタイプで見分ける
+			if typ, ok := want["type"]; ok && b.Body["type"] != typ {
+				continue
+			}
 			for k, v := range want {
+				if got, ok := b.Body[k]; v == nil && (!ok || got != nil) {
+					return fmt.Errorf("%s %s %q: %s must be sent as null, got %v (sent: %v)", method, pathPattern, name, k, got, ok)
+				}
 				if fmt.Sprint(b.Body[k]) != fmt.Sprint(v) {
 					return fmt.Errorf("%s %s %q: %s = %v, want %v", method, pathPattern, name, k, b.Body[k], v)
 				}
@@ -369,11 +413,21 @@ resource "conohavps_dns_record" "www" {
 }
 
 resource "conohavps_dns_record" "mx" {
+  domain_id   = conohavps_dns_domain.main.id
+  name        = "example.com."
+  type        = "MX"
+  data        = "mail.example.com."
+  priority    = 10
+  ttl         = 600
+  description = "primary mail"
+}
+
+resource "conohavps_dns_record" "legacy_mx" {
   domain_id = conohavps_dns_domain.main.id
-  name      = "example.com."
+  name      = "old.example.com."
   type      = "MX"
   data      = "mail.example.com."
-  priority  = 10
+  priority  = 5
 }
 
 resource "conohavps_dns_record" "srv" {
@@ -401,7 +455,7 @@ resource "conohavps_dns_record" "alias" {
 }
 `
 
-// 更新: A の値と名前、MX の優先度、SRV の重みとポートを変え、CNAME を AAAA に変える（作り直し）.
+// 更新: A の値と名前、MX の優先度・TTL・説明、SRV の重みとポートを変え、CNAME を AAAA に、MX を CNAME に変える.
 const dnsRecordsV2 = `
 resource "conohavps_dns_record" "www" {
   domain_id = conohavps_dns_domain.main.id
@@ -416,6 +470,14 @@ resource "conohavps_dns_record" "mx" {
   type      = "MX"
   data      = "mail.example.com."
   priority  = 20
+  ttl       = 300
+}
+
+resource "conohavps_dns_record" "legacy_mx" {
+  domain_id = conohavps_dns_domain.main.id
+  name      = "old.example.com."
+  type      = "CNAME"
+  data      = "www.example.com."
 }
 
 resource "conohavps_dns_record" "srv" {
@@ -468,12 +530,17 @@ func TestDNSDomainAndRecords(t *testing.T) {
 					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("ttl"), knownvalue.Int64Exact(3600)),
 					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("priority"), knownvalue.Null()),
 					statecheck.ExpectKnownValue("conohavps_dns_record.mx", tfjsonpath.New("priority"), knownvalue.Int64Exact(10)),
+					statecheck.ExpectKnownValue("conohavps_dns_record.mx", tfjsonpath.New("ttl"), knownvalue.Int64Exact(600)),
+					statecheck.ExpectKnownValue("conohavps_dns_record.mx", tfjsonpath.New("description"), knownvalue.StringExact("primary mail")),
+					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("description"), knownvalue.Null()),
+					statecheck.ExpectKnownValue("conohavps_dns_domain.main", tfjsonpath.New("description"), knownvalue.Null()),
 					statecheck.ExpectKnownValue("conohavps_dns_record.srv", tfjsonpath.New("port"), knownvalue.Int64Exact(5060)),
 					statecheck.ExpectKnownValue("conohavps_dns_record.txt", tfjsonpath.New("data"), knownvalue.StringExact(`"v=spf1 -all"`)),
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					f.expectBody("POST", dnsDomainsPath, "example.com.", map[string]any{"ttl": 3600, "email": "admin@example.com"}),
-					f.expectBody("POST", dnsRecordsPath, "www.example.com.", map[string]any{"type": "A", "data": "192.0.2.10"}, "priority", "weight", "port", "ttl"),
+					f.expectBody("POST", dnsRecordsPath, "www.example.com.", map[string]any{"type": "A", "data": "192.0.2.10"}, "priority", "weight", "port", "ttl", "description"),
+					f.expectBody("POST", dnsRecordsPath, "example.com.", map[string]any{"type": "MX", "priority": 10, "ttl": 600, "description": "primary mail"}, "weight", "port"),
 					f.expectBody("POST", dnsRecordsPath, "_sip._tcp.example.com.", map[string]any{"type": "SRV", "data": "sip.example.com.", "priority": 10, "weight": 60, "port": 5060}),
 					f.expectBody("POST", dnsRecordsPath, "blog.example.com.", map[string]any{"type": "CNAME", "data": "www.example.com."}),
 					resource.TestCheckResourceAttrPair("conohavps_dns_record.www", "domain_id", "conohavps_dns_domain.main", "id"),
@@ -483,9 +550,10 @@ func TestDNSDomainAndRecords(t *testing.T) {
 			{ResourceName: "conohavps_dns_domain.main", ImportState: true, ImportStateVerify: true},
 			{ResourceName: "conohavps_dns_record.www", ImportState: true, ImportStateVerify: true, ImportStateIdFunc: recordImport("conohavps_dns_record.www")},
 			{ResourceName: "conohavps_dns_record.mx", ImportState: true, ImportStateVerify: true, ImportStateIdFunc: recordImport("conohavps_dns_record.mx")},
+			{ResourceName: "conohavps_dns_record.legacy_mx", ImportState: true, ImportStateVerify: true, ImportStateIdFunc: recordImport("conohavps_dns_record.legacy_mx")},
 			{ResourceName: "conohavps_dns_record.srv", ImportState: true, ImportStateVerify: true, ImportStateIdFunc: recordImport("conohavps_dns_record.srv")},
 			{ResourceName: "conohavps_dns_record.txt", ImportState: true, ImportStateVerify: true, ImportStateIdFunc: recordImport("conohavps_dns_record.txt")},
-			// 更新（ドメインの TTL とメールアドレス、レコードはその場で更新、タイプの変更は作り直し）
+			// 更新（ドメインの TTL とメールアドレス、レコードはタイプの変更も含めてその場で更新）
 			{
 				Config: dnsConfig(f, "example.com.", 600, "hostmaster@example.com", dnsRecordsV2),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
@@ -495,7 +563,8 @@ func TestDNSDomainAndRecords(t *testing.T) {
 						plancheck.ExpectResourceAction("conohavps_dns_record.mx", plancheck.ResourceActionUpdate),
 						plancheck.ExpectResourceAction("conohavps_dns_record.srv", plancheck.ResourceActionUpdate),
 						plancheck.ExpectResourceAction("conohavps_dns_record.txt", plancheck.ResourceActionNoop),
-						plancheck.ExpectResourceAction("conohavps_dns_record.alias", plancheck.ResourceActionDestroyBeforeCreate),
+						plancheck.ExpectResourceAction("conohavps_dns_record.alias", plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("conohavps_dns_record.legacy_mx", plancheck.ResourceActionUpdate),
 					},
 				},
 				ConfigStateChecks: []statecheck.StateCheck{
@@ -506,13 +575,23 @@ func TestDNSDomainAndRecords(t *testing.T) {
 					statecheck.ExpectKnownValue("conohavps_dns_record.mx", tfjsonpath.New("priority"), knownvalue.Int64Exact(20)),
 					statecheck.ExpectKnownValue("conohavps_dns_record.srv", tfjsonpath.New("weight"), knownvalue.Int64Exact(5)),
 					statecheck.ExpectKnownValue("conohavps_dns_record.alias", tfjsonpath.New("type"), knownvalue.StringExact("AAAA")),
+					statecheck.ExpectKnownValue("conohavps_dns_record.mx", tfjsonpath.New("ttl"), knownvalue.Int64Exact(300)),
+					statecheck.ExpectKnownValue("conohavps_dns_record.mx", tfjsonpath.New("description"), knownvalue.Null()),
+					statecheck.ExpectKnownValue("conohavps_dns_record.legacy_mx", tfjsonpath.New("type"), knownvalue.StringExact("CNAME")),
+					statecheck.ExpectKnownValue("conohavps_dns_record.legacy_mx", tfjsonpath.New("priority"), knownvalue.Null()),
+					// 設定に無い TTL は今の値を保つ
+					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("ttl"), knownvalue.Int64Exact(3600)),
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
-					// ドメインの更新はドキュメントどおり ttl と email だけを送る
-					f.expectBody("PUT", dnsDomainPath, "", map[string]any{"ttl": 600, "email": "hostmaster@example.com"}, "name"),
-					f.expectBody("PUT", dnsRecordsPath, "web.example.com.", map[string]any{"type": "A", "data": "192.0.2.20"}, "priority"),
+					// ドメインの更新は ttl と email を送り、設定に無い説明と、更新できない名前は送らない
+					f.expectBody("PUT", dnsDomainPath, "", map[string]any{"ttl": 600, "email": "hostmaster@example.com"}, "name", "description"),
+					f.expectBody("PUT", dnsRecordsPath, "web.example.com.", map[string]any{"type": "A", "data": "192.0.2.20"}, "priority", "description"),
 					f.expectBody("PUT", dnsRecordsPath, "_sip._tcp.example.com.", map[string]any{"priority": 10, "weight": 5, "port": 5061}),
-					f.expectBody("POST", dnsRecordsPath, "blog.example.com.", map[string]any{"type": "AAAA", "data": "2001:db8::1"}),
+					f.expectBody("PUT", dnsRecordsPath, "blog.example.com.", map[string]any{"type": "AAAA", "data": "2001:db8::1"}),
+					// 設定から外した説明は空文字で消す
+					f.expectBody("PUT", dnsRecordsPath, "example.com.", map[string]any{"type": "MX", "priority": 20, "ttl": 300, "description": ""}),
+					// MX から CNAME に変えると、要らなくなった優先度を null で消す
+					f.expectBody("PUT", dnsRecordsPath, "old.example.com.", map[string]any{"type": "CNAME", "data": "www.example.com.", "priority": nil}, "weight", "port"),
 				),
 			},
 			{ResourceName: "conohavps_dns_record.alias", ImportState: true, ImportStateVerify: true, ImportStateIdFunc: recordImport("conohavps_dns_record.alias")},
@@ -531,6 +610,7 @@ resource "conohavps_dns_record" "www" {
 						plancheck.ExpectResourceAction("conohavps_dns_domain.main", plancheck.ResourceActionDestroyBeforeCreate),
 						plancheck.ExpectResourceAction("conohavps_dns_record.www", plancheck.ResourceActionDestroyBeforeCreate),
 						plancheck.ExpectResourceAction("conohavps_dns_record.mx", plancheck.ResourceActionDestroy),
+						plancheck.ExpectResourceAction("conohavps_dns_record.legacy_mx", plancheck.ResourceActionDestroy),
 					},
 				},
 				Check: f.expectBody("POST", dnsDomainsPath, "example.net.", map[string]any{"ttl": 600}),
@@ -584,6 +664,139 @@ resource "conohavps_dns_record" "txt" {
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 				},
 			},
+		},
+	})
+}
+
+// ドメインの説明を扱い、メールアドレス・説明・レコードの TTL と説明を外で変えられたら差分として出して戻す.
+func TestDNSDescriptionAndDrift(t *testing.T) {
+	f := newFakeDNS(t)
+	config := func(domainDesc, recordDesc string) string {
+		return f.s.ProviderConfig() + `
+resource "conohavps_dns_domain" "main" {
+  name  = "example.com."
+  ttl   = 3600
+  email = "admin@example.com"
+` + domainDesc + `
+}
+
+resource "conohavps_dns_record" "www" {
+  domain_id = conohavps_dns_domain.main.id
+  name      = "www.example.com."
+  type      = "A"
+  data      = "192.0.2.10"
+  ttl       = 300
+` + recordDesc + `
+}
+`
+	}
+	withDesc := config(`description = "My domain"`, `description = "web server"`)
+	// 外で変える. 次の plan で差分が出る
+	changeOutside := func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for id, d := range f.domains {
+			d["email"], d["description"] = "intruder@example.org", "changed"
+			for _, rec := range f.records[id] {
+				if rec["type"] == "A" {
+					rec["ttl"], rec["description"] = 7200, "changed"
+				}
+			}
+		}
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: fakeapi.Factories,
+		CheckDestroy:             f.checkDestroyed,
+		Steps: []resource.TestStep{
+			{
+				Config: withDesc,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_dns_domain.main", tfjsonpath.New("description"), knownvalue.StringExact("My domain")),
+					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("description"), knownvalue.StringExact("web server")),
+					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("ttl"), knownvalue.Int64Exact(300)),
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					f.expectBody("POST", dnsDomainsPath, "example.com.", map[string]any{"description": "My domain"}),
+					f.expectBody("POST", dnsRecordsPath, "www.example.com.", map[string]any{"ttl": 300, "description": "web server"}),
+				),
+			},
+			{ResourceName: "conohavps_dns_domain.main", ImportState: true, ImportStateVerify: true},
+			// 外での変更は refresh で差分になり、apply で設定の値に戻す
+			{
+				PreConfig: changeOutside,
+				Config:    withDesc,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("conohavps_dns_domain.main", plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("conohavps_dns_record.www", plancheck.ResourceActionUpdate),
+						plancheck.ExpectKnownValue("conohavps_dns_domain.main", tfjsonpath.New("email"), knownvalue.StringExact("admin@example.com")),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					f.expectBody("PUT", dnsDomainPath, "", map[string]any{"email": "admin@example.com", "description": "My domain"}),
+					f.expectBody("PUT", dnsRecordsPath, "www.example.com.", map[string]any{"ttl": 300, "description": "web server"}),
+				),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_dns_domain.main", tfjsonpath.New("email"), knownvalue.StringExact("admin@example.com")),
+					statecheck.ExpectKnownValue("conohavps_dns_domain.main", tfjsonpath.New("description"), knownvalue.StringExact("My domain")),
+					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("ttl"), knownvalue.Int64Exact(300)),
+					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("description"), knownvalue.StringExact("web server")),
+				},
+			},
+			// 説明を設定から外すと、空文字を送って消す
+			{
+				Config: config("", ""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("conohavps_dns_domain.main", plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("conohavps_dns_record.www", plancheck.ResourceActionUpdate),
+					},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_dns_domain.main", tfjsonpath.New("description"), knownvalue.Null()),
+					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("description"), knownvalue.Null()),
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					f.expectBody("PUT", dnsDomainPath, "", map[string]any{"description": ""}),
+					f.expectBody("PUT", dnsRecordsPath, "www.example.com.", map[string]any{"description": ""}),
+				),
+			},
+			{Config: config("", ""), PlanOnly: true},
+		},
+	})
+}
+
+// API が HTML ドキュメントのレスポンス例の形（uuid・domain_uuid・伏せ字のメールアドレス）で返しても、
+// ID を読み、伏せ字のメールアドレスで差分を出さない.
+func TestDNSLegacyResponseShape(t *testing.T) {
+	f := newFakeDNS(t)
+	f.legacy = true
+	config := dnsConfig(f, "example.com.", 3600, "admin@example.com", `
+resource "conohavps_dns_record" "www" {
+  domain_id = conohavps_dns_domain.main.id
+  name      = "www.example.com."
+  type      = "A"
+  data      = "192.0.2.10"
+}
+`)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: fakeapi.Factories,
+		CheckDestroy:             f.checkDestroyed,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_dns_domain.main", tfjsonpath.New("id"), knownvalue.StringRegexp(regexp.MustCompile(`^domain-`))),
+					statecheck.ExpectKnownValue("conohavps_dns_domain.main", tfjsonpath.New("email"), knownvalue.StringExact("admin@example.com")),
+					statecheck.ExpectKnownValue("conohavps_dns_record.www", tfjsonpath.New("id"), knownvalue.StringRegexp(regexp.MustCompile(`^record-`))),
+				},
+				Check: resource.TestCheckResourceAttrPair("conohavps_dns_record.www", "domain_id", "conohavps_dns_domain.main", "id"),
+			},
+			{ResourceName: "conohavps_dns_record.www", ImportState: true, ImportStateVerify: true, ImportStateIdFunc: func(s *terraform.State) (string, error) {
+				rs := s.RootModule().Resources["conohavps_dns_record.www"]
+				return rs.Primary.Attributes["domain_id"] + "/" + rs.Primary.ID, nil
+			}},
+			{Config: config, PlanOnly: true},
 		},
 	})
 }
@@ -672,6 +885,14 @@ resource "conohavps_dns_record" "r" {
   type = "MX"
   data = "mail.example.com."
   priority = 70000`), `must be between 0 and 65535`},
+		{record(`name = "www.example.com."
+  type = "A"
+  data = "192.0.2.1"
+  ttl = 0`), `must be between 1 and 2147483647`},
+		{record(`name = "www.example.com."
+  type = "A"
+  data = "192.0.2.1"
+  description = ""`), `string length must be at least 1`},
 	}
 	var steps []resource.TestStep
 	for _, c := range cases {

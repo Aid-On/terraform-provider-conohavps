@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -30,6 +31,7 @@ var (
 )
 
 // 作成できるレコードのタイプ（SOA は ConoHa が自動で作る）.
+// HTML ドキュメントはこの7つを挙げ、OpenAPI 仕様は "A, AAAA, CNAME, MX, TXT, SRV, NS, etc." とだけ書く.
 var dnsRecordTypes = []string{"A", "AAAA", "CNAME", "MX", "NS", "SRV", "TXT"}
 
 // レコード値がホスト名になるタイプ.
@@ -48,15 +50,16 @@ type DNSRecordResource struct {
 
 // DNS のレコードのリソースモデル.
 type DNSRecordResourceModel struct {
-	ID       types.String `tfsdk:"id"`        // レコード ID
-	DomainID types.String `tfsdk:"domain_id"` // ドメイン ID
-	Name     types.String `tfsdk:"name"`      // レコード名（末尾にピリオド）
-	Type     types.String `tfsdk:"type"`      // レコードタイプ
-	Data     types.String `tfsdk:"data"`      // レコード値
-	Priority types.Int64  `tfsdk:"priority"`  // 優先度（MX・SRV）
-	Weight   types.Int64  `tfsdk:"weight"`    // 重み（SRV）
-	Port     types.Int64  `tfsdk:"port"`      // ポート番号（SRV）
-	TTL      types.Int64  `tfsdk:"ttl"`       // TTL（秒）
+	ID          types.String `tfsdk:"id"`          // レコード ID
+	DomainID    types.String `tfsdk:"domain_id"`   // ドメイン ID
+	Name        types.String `tfsdk:"name"`        // レコード名（末尾にピリオド）
+	Type        types.String `tfsdk:"type"`        // レコードタイプ
+	Data        types.String `tfsdk:"data"`        // レコード値
+	Priority    types.Int64  `tfsdk:"priority"`    // 優先度（MX・SRV）
+	Weight      types.Int64  `tfsdk:"weight"`      // 重み（SRV）
+	Port        types.Int64  `tfsdk:"port"`        // ポート番号（SRV）
+	TTL         types.Int64  `tfsdk:"ttl"`         // TTL（秒）
+	Description types.String `tfsdk:"description"` // 説明
 }
 
 func (r *DNSRecordResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -96,14 +99,11 @@ func (r *DNSRecordResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				},
 			},
 			"type": schema.StringAttribute{
-				// タイプを変えると priority・weight・port の要否が変わるため、作り直す
-				MarkdownDescription: "The type of the record. One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `SRV` and `TXT`. Changing this value will force the record to be recreated.",
+				// 更新 API はタイプも受け付ける. 新しいタイプで要らなくなる priority・weight・port は null を送って消す
+				MarkdownDescription: "The type of the record. One of `A`, `AAAA`, `CNAME`, `MX`, `NS`, `SRV` and `TXT`. Changing this value will update the record.",
 				Required:            true,
 				Validators: []validator.String{
 					stringvalidator.OneOf(dnsRecordTypes...),
-				},
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"data": schema.StringAttribute{
@@ -128,10 +128,24 @@ func (r *DNSRecordResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Optional:            true,
 				Validators:          uint16Range,
 			},
-			// レスポンス専用フィールド（作成・更新の API は TTL を受け付けない）
 			"ttl": schema.Int64Attribute{
-				MarkdownDescription: "The TTL of the record in seconds, as set by ConoHa DNS. The API does not accept a TTL for records.",
+				MarkdownDescription: "The TTL of the record in seconds. If omitted, ConoHa DNS chooses it, and removing it from the configuration keeps the current value. Changing this value will update the record.",
+				Optional:            true,
 				Computed:            true,
+				Validators: []validator.Int64{
+					int64validator.Between(1, dnsMaxTTL),
+				},
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
+			},
+			"description": schema.StringAttribute{
+				MarkdownDescription: "A free-text description of the record. Changing this value will update the record.",
+				Optional:            true,
+				Validators: []validator.String{
+					// API は空の説明を説明なしと同じに返すため、空文字は受け付けない
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 		},
 	}
@@ -216,7 +230,7 @@ func (r *DNSRecordResource) Create(ctx context.Context, req resource.CreateReque
 		"type":      plan.Type.ValueString(),
 	})
 
-	record, err := r.client.CreateDNSRecord(ctx, plan.DomainID.ValueString(), plan.opts())
+	record, err := r.client.CreateDNSRecord(ctx, plan.DomainID.ValueString(), plan.opts(nil))
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Failed to create DNS record resource",
@@ -280,7 +294,7 @@ func (r *DNSRecordResource) Update(ctx context.Context, req resource.UpdateReque
 		"id":        state.ID.ValueString(),
 	})
 
-	record, err := r.client.UpdateDNSRecord(ctx, state.DomainID.ValueString(), state.ID.ValueString(), plan.opts())
+	record, err := r.client.UpdateDNSRecord(ctx, state.DomainID.ValueString(), state.ID.ValueString(), plan.opts(&state))
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Failed to update DNS record resource",
@@ -340,16 +354,39 @@ func (r *DNSRecordResource) ImportState(ctx context.Context, req resource.Import
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), recordID)...)
 }
 
-// モデルから作成・更新のリクエスト本文を組み立てる.
-func (m *DNSRecordResourceModel) opts() service.DNSRecordOpts {
-	return service.DNSRecordOpts{
-		Name:     m.Name.ValueString(),
-		Type:     m.Type.ValueString(),
-		Data:     m.Data.ValueString(),
-		Priority: m.Priority.ValueInt64Pointer(),
-		Weight:   m.Weight.ValueInt64Pointer(),
-		Port:     m.Port.ValueInt64Pointer(),
+// モデルから作成・更新のリクエスト本文を組み立てる. 更新では今の state を渡す.
+// 更新で設定から外れた priority・weight・port（タイプの変更で要らなくなったもの）は null を送って消し、
+// 外れた説明は空文字を送って消す. ttl は値が未定（作成時に設定が無い）なら送らない.
+func (m *DNSRecordResourceModel) opts(state *DNSRecordResourceModel) service.DNSRecordOpts {
+	o := service.DNSRecordOpts{
+		Name:        m.Name.ValueString(),
+		Type:        m.Type.ValueString(),
+		Data:        m.Data.ValueString(),
+		Priority:    m.Priority.ValueInt64Pointer(),
+		Weight:      m.Weight.ValueInt64Pointer(),
+		Port:        m.Port.ValueInt64Pointer(),
+		Description: m.Description.ValueStringPointer(),
 	}
+	if !m.TTL.IsUnknown() {
+		o.TTL = m.TTL.ValueInt64Pointer()
+	}
+	if state == nil {
+		return o
+	}
+	for _, f := range []struct {
+		key         string
+		plan, state types.Int64
+	}{
+		{"priority", m.Priority, state.Priority},
+		{"weight", m.Weight, state.Weight},
+		{"port", m.Port, state.Port},
+	} {
+		if f.plan.IsNull() && !f.state.IsNull() {
+			o.Null = append(o.Null, f.key)
+		}
+	}
+	o.Description = dnsDescriptionOpt(m.Description, state.Description)
+	return o
 }
 
 // API のレスポンスをモデルに写す.
@@ -369,6 +406,7 @@ func (m *DNSRecordResourceModel) fromAPI(rec *service.DNSRecord) {
 	m.Weight = types.Int64PointerValue(rec.Weight)
 	m.Port = types.Int64PointerValue(rec.Port)
 	m.TTL = types.Int64PointerValue(rec.TTL)
+	m.Description = dnsDescriptionValue(rec.Description)
 }
 
 // 2つのレコード値が同じものを指すか.

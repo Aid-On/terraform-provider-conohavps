@@ -43,11 +43,12 @@ type DNSDomainResource struct {
 
 // DNS のドメインのリソースモデル.
 type DNSDomainResourceModel struct {
-	ID        types.String `tfsdk:"id"`         // ドメイン ID
-	Name      types.String `tfsdk:"name"`       // ドメイン名（末尾にピリオド）
-	TTL       types.Int64  `tfsdk:"ttl"`        // TTL（秒）
-	Email     types.String `tfsdk:"email"`      // 連絡先メールアドレス
-	ProjectID types.String `tfsdk:"project_id"` // テナント ID
+	ID          types.String `tfsdk:"id"`          // ドメイン ID
+	Name        types.String `tfsdk:"name"`        // ドメイン名（末尾にピリオド）
+	TTL         types.Int64  `tfsdk:"ttl"`         // TTL（秒）
+	Email       types.String `tfsdk:"email"`       // 連絡先メールアドレス
+	Description types.String `tfsdk:"description"` // 説明
+	ProjectID   types.String `tfsdk:"project_id"`  // テナント ID
 }
 
 func (r *DNSDomainResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -91,9 +92,17 @@ func (r *DNSDomainResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 					stringvalidator.RegexMatches(regexp.MustCompile(`^[^@\s]+@[^@\s]+$`), "must be an email address"),
 				},
 			},
-			// レスポンス専用フィールド
+			"description": schema.StringAttribute{
+				MarkdownDescription: "A free-text description of the domain. Changing this value will update the domain.",
+				Optional:            true,
+				Validators: []validator.String{
+					// API は空の説明を説明なしと同じに返すため、空文字は受け付けない
+					stringvalidator.LengthAtLeast(1),
+				},
+			},
+			// レスポンス専用フィールド（OpenAPI 仕様には無く、HTML ドキュメントのレスポンス例にだけある）
 			"project_id": schema.StringAttribute{
-				MarkdownDescription: "The tenant ID that owns the domain.",
+				MarkdownDescription: "The tenant ID that owns the domain, if ConoHa DNS returns it.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -131,9 +140,10 @@ func (r *DNSDomainResource) Create(ctx context.Context, req resource.CreateReque
 	tflog.Debug(ctx, "Starting DNS domain creation request.", map[string]any{"name": plan.Name.ValueString()})
 
 	domain, err := r.client.CreateDNSDomain(ctx, service.DNSDomainCreateOpts{
-		Name:  plan.Name.ValueString(),
-		TTL:   plan.TTL.ValueInt64(),
-		Email: plan.Email.ValueString(),
+		Name:        plan.Name.ValueString(),
+		TTL:         plan.TTL.ValueInt64(),
+		Email:       plan.Email.ValueString(),
+		Description: plan.Description.ValueString(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -191,10 +201,11 @@ func (r *DNSDomainResource) Update(ctx context.Context, req resource.UpdateReque
 
 	tflog.Debug(ctx, "Starting DNS domain update request.", map[string]any{"id": state.ID.ValueString()})
 
-	// 更新できるのは TTL と連絡先メールアドレスだけ
+	// 更新できるのは TTL・連絡先メールアドレス・説明だけ
 	domain, err := r.client.UpdateDNSDomain(ctx, state.ID.ValueString(), service.DNSDomainUpdateOpts{
-		TTL:   plan.TTL.ValueInt64(),
-		Email: plan.Email.ValueString(),
+		TTL:         plan.TTL.ValueInt64(),
+		Email:       plan.Email.ValueString(),
+		Description: dnsDescriptionOpt(plan.Description, state.Description),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -248,11 +259,34 @@ func (m *DNSDomainResourceModel) fromAPI(d *service.DNSDomain) {
 	m.Name = types.StringValue(dnsPreferName(m.Name, d.Name))
 	m.TTL = types.Int64Value(d.TTL)
 	m.Email = types.StringValue(dnsPreferEmail(m.Email, d.Email))
+	m.Description = dnsDescriptionValue(d.Description)
 	m.ProjectID = types.StringValue(d.ProjectID)
 }
 
-// API が返したメールアドレスが伏せ字（"******@****.***" の形）なら、今の値を残す.
-// ドキュメントのレスポンス例は伏せ字で、実際の API が伏せて返す場合に plan へ差分を出さないため.
+// 更新で送る説明. 設定にあればその値を、設定から外されたなら空文字（説明を消す）を、どちらでもなければ送らない.
+func dnsDescriptionOpt(plan, state types.String) *string {
+	switch {
+	case !plan.IsNull():
+		return plan.ValueStringPointer()
+	case !state.IsNull():
+		empty := ""
+		return &empty
+	}
+	return nil
+}
+
+// API が返した説明をモデルの値にする. 空文字と説明なしは区別しない.
+func dnsDescriptionValue(s string) types.String {
+	if s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(s)
+}
+
+// API が返したメールアドレスを使い、外で変えられたら差分として出す.
+// ただし伏せ字（"******@****.***" のように * だけの形）なら、今の値を残す.
+// OpenAPI 仕様のレスポンス例は実際のアドレスを返すが、HTML ドキュメントのレスポンス例は伏せ字のため、
+// API が伏せて返す場合に plan へ差分を出し続けないための予備の扱い.
 func dnsPreferEmail(current types.String, fromAPI string) string {
 	if !current.IsNull() && !current.IsUnknown() && dnsMaskedEmail.MatchString(fromAPI) {
 		return current.ValueString()

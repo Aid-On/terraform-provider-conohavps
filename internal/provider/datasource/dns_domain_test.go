@@ -19,9 +19,10 @@ import (
 func withDNSDomains(t *testing.T) *fakeapi.Server {
 	s := fakeapi.New(t)
 	all := []map[string]any{
+		// OpenAPI 仕様の DomainBody の形. 1件目だけ HTML ドキュメントの形（uuid）で返す
 		{"uuid": "dom-a", "name": "a.example.com.", "project_id": fakeapi.TenantID, "serial": 1, "ttl": 3600, "email": "a@example.com"},
-		{"uuid": "dom-b", "name": "b.example.com.", "project_id": fakeapi.TenantID, "serial": 1, "ttl": 3600, "email": "b@example.com"},
-		{"uuid": "dom-c", "name": "c.example.com.", "project_id": fakeapi.TenantID, "serial": 1, "ttl": 600, "email": "c@example.com"},
+		{"id": "dom-b", "name": "b.example.com.", "project_id": fakeapi.TenantID, "serial": 1, "ttl": 3600, "email": "b@example.com", "description": ""},
+		{"id": "dom-c", "name": "c.example.com.", "project_id": fakeapi.TenantID, "serial": 1, "ttl": 600, "email": "c@example.com", "description": "My domain"},
 	}
 	s.Mux.HandleFunc("GET /dns-service/v1/domains", func(w http.ResponseWriter, r *http.Request) {
 		if !fakeapi.Authorized(w, r) {
@@ -50,7 +51,16 @@ func TestDNSDomainByName(t *testing.T) {
 					statecheck.ExpectKnownValue("data.conohavps_dns_domain.c", tfjsonpath.New("id"), knownvalue.StringExact("dom-c")),
 					statecheck.ExpectKnownValue("data.conohavps_dns_domain.c", tfjsonpath.New("ttl"), knownvalue.Int64Exact(600)),
 					statecheck.ExpectKnownValue("data.conohavps_dns_domain.c", tfjsonpath.New("email"), knownvalue.StringExact("c@example.com")),
+					statecheck.ExpectKnownValue("data.conohavps_dns_domain.c", tfjsonpath.New("description"), knownvalue.StringExact("My domain")),
 					statecheck.ExpectKnownValue("data.conohavps_dns_domain.c", tfjsonpath.New("project_id"), knownvalue.StringExact(fakeapi.TenantID)),
+				},
+			},
+			{
+				// uuid で返るドメインも ID を読み、説明が無ければ null にする
+				Config: s.ProviderConfig() + `data "conohavps_dns_domain" "a" { name = "a.example.com." }`,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("data.conohavps_dns_domain.a", tfjsonpath.New("id"), knownvalue.StringExact("dom-a")),
+					statecheck.ExpectKnownValue("data.conohavps_dns_domain.a", tfjsonpath.New("description"), knownvalue.Null()),
 				},
 			},
 			{

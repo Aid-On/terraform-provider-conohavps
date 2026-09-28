@@ -13,9 +13,10 @@ Manages a domain (zone) registered in ConoHa DNS. ConoHa creates the SOA and NS 
 
 ```terraform
 resource "conohavps_dns_domain" "example" {
-  name  = "example.com."
-  ttl   = 3600
-  email = "hostmaster@example.com"
+  name        = "example.com."
+  ttl         = 3600
+  email       = "hostmaster@example.com"
+  description = "Company website"
 }
 ```
 
@@ -28,10 +29,14 @@ resource "conohavps_dns_domain" "example" {
 - `name` (String) The domain name, ending with a period (e.g. `example.com.`). Letters are compared case-insensitively. Changing this value will force the domain to be recreated.
 - `ttl` (Number) The TTL of the domain in seconds.
 
+### Optional
+
+- `description` (String) A free-text description of the domain. Changing this value will update the domain.
+
 ### Read-Only
 
 - `id` (String) The ID (UUID) of the domain.
-- `project_id` (String) The tenant ID that owns the domain.
+- `project_id` (String) The tenant ID that owns the domain, if ConoHa DNS returns it.
 
 ## Import
 

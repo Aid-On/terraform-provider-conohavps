@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strconv"
@@ -57,5 +58,53 @@ func TestDNSUnavailableWithoutCatalogEntry(t *testing.T) {
 	c := &service.ConohaClient{}
 	if _, err := c.GetDNSDomain(context.Background(), "x"); err == nil || err.Error() != service.ServiceUnavailable("dns").Error() {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// ID は OpenAPI 仕様の id・domain_id と、HTML ドキュメントの uuid・domain_uuid のどちらでも読む.
+func TestDNSDecodesBothIDKeys(t *testing.T) {
+	cases := []struct{ body, id, domainID string }{
+		{`{"id": "r1", "domain_id": "d1", "ttl": 300, "description": "x"}`, "r1", "d1"},
+		{`{"uuid": "r2", "domain_uuid": "d2", "ttl": 3600}`, "r2", "d2"},
+	}
+	for _, c := range cases {
+		var r service.DNSRecord
+		if err := json.Unmarshal([]byte(c.body), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.ID != c.id || r.DomainID != c.domainID || r.TTL == nil {
+			t.Errorf("%s: got %+v", c.body, r)
+		}
+		var d service.DNSDomain
+		if err := json.Unmarshal([]byte(c.body), &d); err != nil {
+			t.Fatal(err)
+		}
+		if d.ID != c.id {
+			t.Errorf("%s: domain id = %q", c.body, d.ID)
+		}
+	}
+}
+
+// レコードの本文は、値の無いフィールドを送らず、Null に挙げたものだけ null で送る.
+func TestDNSRecordOptsNull(t *testing.T) {
+	ten := int64(10)
+	b, err := json.Marshal(service.DNSRecordOpts{Name: "a.", Type: "CNAME", Data: "b.", Priority: &ten, Null: []string{"priority", "weight"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["priority"] != float64(10) {
+		t.Errorf("priority = %v", m["priority"])
+	}
+	if v, ok := m["weight"]; !ok || v != nil {
+		t.Errorf("weight = %v (sent: %v), want null", v, ok)
+	}
+	for _, k := range []string{"port", "ttl", "description", "Null"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("%s must not be sent: %s", k, b)
+		}
 	}
 }
