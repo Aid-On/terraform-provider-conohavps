@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Volume"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/volume/volume_snapshot/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Volume snapshots can be imported using its `id` .
+
+{{ codefile "shell" "examples/resources/volume/volume_snapshot/import.sh" }}
