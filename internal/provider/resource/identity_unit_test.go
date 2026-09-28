@@ -6,10 +6,13 @@
 package resource_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"regexp"
 	"slices"
@@ -67,6 +70,18 @@ type identityFake struct {
 	users map[string]*fakeSubUser
 	creds map[string]*fakeCredential
 	calls []identityCall
+	// サブユーザーとしてのトークン発行（パスワードの検証）の記録と、0 以外なら返す状態コード
+	tokenCalls  []identityTokenCall
+	tokenStatus int
+}
+
+// サブユーザーとしてのトークン発行のリクエスト（検証用）.
+type identityTokenCall struct {
+	UserID    string
+	ProjectID string
+	Methods   []string
+	AuthToken string // X-Auth-Token ヘッダー（プロバイダのトークンを付けていないことを確かめる）
+	Query     string
 }
 
 var identityFakePermissions = []map[string]string{
@@ -106,7 +121,88 @@ func newIdentityFake(t *testing.T) *identityFake {
 	f.handle("POST "+v3+"/users/{uid}/credentials/OS-EC2", f.createCredential)
 	f.handle("GET "+v3+"/users/{uid}/credentials/OS-EC2/{access}", f.getCredential)
 	f.handle("DELETE "+v3+"/users/{uid}/credentials/OS-EC2/{access}", f.deleteCredential)
+
+	// トークン発行は fakeapi がプロバイダ自身のログイン用に受けている. ServeMux はホスト付きの
+	// パターンをホスト無しのものより優先するため、ホスト付きで登録してサブユーザーのログインだけを受け、
+	// それ以外はホストを変えて fakeapi のハンドラへ回す
+	u, err := url.Parse(f.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Mux.HandleFunc("POST "+u.Hostname()+v3+"/auth/tokens", f.issueToken)
 	return f
+}
+
+// サブユーザーのトークン発行を受ける. パスワードが合えば 201、違えば 401 を返す.
+func (f *identityFake) issueToken(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		identityBadRequest(w, err.Error())
+		return
+	}
+	var body struct {
+		Auth struct {
+			Identity struct {
+				Methods  []string `json:"methods"`
+				Password struct {
+					User struct {
+						ID       string `json:"id"`
+						Password string `json:"password"`
+					} `json:"user"`
+				} `json:"password"`
+			} `json:"identity"`
+			Scope struct {
+				Project struct {
+					ID string `json:"id"`
+				} `json:"project"`
+			} `json:"scope"`
+		} `json:"auth"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		identityBadRequest(w, err.Error())
+		return
+	}
+	user := body.Auth.Identity.Password.User
+
+	f.mu.Lock()
+	sub, ok := f.users[user.ID]
+	if ok {
+		f.tokenCalls = append(f.tokenCalls, identityTokenCall{
+			UserID: user.ID, ProjectID: body.Auth.Scope.Project.ID, Methods: body.Auth.Identity.Methods,
+			AuthToken: r.Header.Get("X-Auth-Token"), Query: r.URL.RawQuery,
+		})
+	}
+	status := f.tokenStatus
+	f.mu.Unlock()
+
+	if !ok {
+		// プロバイダ自身のログイン
+		r2 := r.Clone(r.Context())
+		r2.Host = "provider.invalid"
+		r2.Body = io.NopCloser(bytes.NewReader(raw))
+		f.Mux.ServeHTTP(w, r2)
+		return
+	}
+	switch {
+	case status != 0:
+		identityStatus(w, status)
+	case user.Password != sub.Password:
+		identityStatus(w, http.StatusUnauthorized)
+	default:
+		w.Header().Set("X-Subject-Token", "token-of-"+user.ID)
+		fakeapi.WriteJSON(w, http.StatusCreated, map[string]any{"token": map[string]any{"expires_at": "2099-01-01T00:00:00.000000Z"}})
+	}
+}
+
+func identityStatus(w http.ResponseWriter, status int) {
+	fakeapi.WriteJSON(w, status, map[string]any{"error": map[string]any{"code": status, "message": http.StatusText(status)}})
+}
+
+// サブユーザーとしてのトークン発行の記録を返す.
+func (f *identityFake) tokens() []identityTokenCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.tokenCalls)
 }
 
 // トークンを確かめ、リクエストを記録してからハンドラを呼ぶ.
@@ -757,6 +853,148 @@ func TestIdentityValidation(t *testing.T) {
 		})
 	}
 	resource.UnitTest(t, resource.TestCase{ProtoV6ProviderFactories: fakeapi.Factories, Steps: steps})
+}
+
+// サブユーザーだけの設定（パスワードの検証を確かめる）.
+func (f *identityFake) subUserConfig(password, roles string) string {
+	return f.ProviderConfig() + fmt.Sprintf(`
+resource "conohavps_role" "agent" {
+  name        = "agent"
+  permissions = ["get-server-list"]
+}
+
+resource "conohavps_subuser" "agent" {
+  password = %q
+  roles    = %s
+}
+`, password, roles)
+}
+
+// gmo-identity を持つサブユーザーは、読み込みのたびに State のパスワードでトークンを発行して確かめる.
+// 有効なら差分は出ず、Terraform の外で変えられていれば差分になって、適用で設定の値に戻る.
+func TestIdentitySubUserPasswordDrift(t *testing.T) {
+	f := newIdentityFake(t)
+	cfg := f.subUserConfig("Agent-pass-1", `[conohavps_role.agent.id, "gmo-identity"]`)
+	var userID string
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: fakeapi.Factories,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: func(s *terraform.State) error {
+					userID = s.RootModule().Resources["conohavps_subuser.agent"].Primary.ID
+					return nil
+				},
+			},
+			// パスワードが今も有効: 検証のトークン発行は行われ、差分は出ない
+			{
+				PreConfig: func() {
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					f.tokenCalls = nil
+				},
+				Config:   cfg,
+				PlanOnly: true,
+			},
+			{
+				Config:   cfg,
+				PlanOnly: true,
+				// 直前の計画での検証リクエストを確かめる. プロバイダのトークンを付けず、テナントで絞る
+				PreConfig: func() {
+					calls := f.tokens()
+					if len(calls) == 0 {
+						t.Fatal("the sub-user password was not verified")
+					}
+					want := identityTokenCall{UserID: userID, ProjectID: fakeapi.TenantID, Methods: []string{"password"}, Query: "nocatalog"}
+					for _, c := range calls {
+						if !reflect.DeepEqual(c, want) {
+							t.Fatalf("token request = %+v, want %+v", c, want)
+						}
+					}
+				},
+			},
+			// Terraform の外でパスワードが変えられた: 差分になり、適用で設定の値に戻る
+			{
+				PreConfig: func() {
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					f.users[userID].Password = "Changed-outside-1"
+				},
+				Config: cfg,
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("conohavps_subuser.agent", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					identityExpectBody(f, "PUT", "/sub-users/subuser-[0-9]+", []string{"user", "password"}, "Agent-pass-1"),
+					func(*terraform.State) error {
+						f.mu.Lock()
+						defer f.mu.Unlock()
+						if got := f.users[userID].Password; got != "Agent-pass-1" {
+							return fmt.Errorf("sub-user password was not restored")
+						}
+						return nil
+					},
+				),
+			},
+			// トークン発行がサーバーエラー: 確かめられないので State を残し、差分もエラーも出さない
+			{
+				PreConfig: func() {
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					f.tokenCalls = nil
+					f.tokenStatus = http.StatusServiceUnavailable
+				},
+				Config:   cfg,
+				PlanOnly: true,
+			},
+			{
+				PreConfig: func() {
+					if len(f.tokens()) == 0 {
+						t.Fatal("the sub-user password was not verified while the token endpoint failed")
+					}
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					f.tokenStatus = 0
+				},
+				Config:   cfg,
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// gmo-identity を持たないサブユーザーはトークンを発行できないため、パスワードを確かめない
+// （Terraform の外で変えられても差分にならない）.
+func TestIdentitySubUserPasswordNotVerifiedWithoutTokenRole(t *testing.T) {
+	f := newIdentityFake(t)
+	cfg := f.subUserConfig("Agent-pass-1", `[conohavps_role.agent.id]`)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: fakeapi.Factories,
+		Steps: []resource.TestStep{
+			{Config: cfg},
+			{
+				PreConfig: func() {
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					for _, u := range f.users {
+						u.Password = "Changed-outside-1"
+					}
+				},
+				Config:   cfg,
+				PlanOnly: true,
+			},
+			{
+				PreConfig: func() {
+					if calls := f.tokens(); len(calls) != 0 {
+						t.Fatalf("%d verification requests were made for a sub-user without gmo-identity", len(calls))
+					}
+				},
+				Config:   cfg,
+				PlanOnly: true,
+			},
+		},
+	})
 }
 
 func identitySorted(s ...string) []string {

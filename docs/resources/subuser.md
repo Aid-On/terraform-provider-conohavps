@@ -50,7 +50,7 @@ output "agent_user_id" {
 
 ### Required
 
-- `password` (String, Sensitive) The password of the sub-user. Must be 9-70 characters long, use only alphanumeric characters and the symbols `!#$%&?"'=+-_{}[]^~:;().,/|\*@`, and contain at least one lowercase letter, one uppercase letter, and one digit or symbol. The API does not return the password, so changes made outside Terraform are not detected. Changing this value updates the password in place.
+- `password` (String, Sensitive) The password of the sub-user. Must be 9-70 characters long, use only alphanumeric characters and the symbols `!#$%&?"'=+-_{}[]^~:;().,/|\*@`, and contain at least one lowercase letter, one uppercase letter, and one digit or symbol. The API does not return the password. When the sub-user has the standard role `gmo-identity`, each refresh verifies the password by issuing a token as the sub-user, and a password changed outside Terraform shows up as a change that sets it back. Without `gmo-identity` the password cannot be verified, so such changes are not detected. If the verification cannot complete (for example on a network error or a server error), the stored password is kept and a warning is logged. Changing this value updates the password in place.
 - `roles` (Set of String) The roles granted to the sub-user, each given by role ID or role name (such as `conohavps_role.example.id` or the standard role `gmo-identity`). At least one and at most 500; the API does not allow a sub-user without roles. A sub-user needs a role with the `post-token` permission (such as `gmo-identity`) to issue a token. Changing this value assigns and unassigns roles in place.
 
 ### Read-Only

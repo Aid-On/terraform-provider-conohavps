@@ -5,20 +5,29 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// ドキュメントの成功コードは作成が 200（クレデンシャルは 201）、削除が 204.
-// 作成の成功コードは API によって揺れがあるため、200 と 201 の両方を受け付ける.
+// 成功コードは OpenAPI 定義に従う. サブユーザーとロールの作成・更新・紐づけは 200、
+// クレデンシャルの作成は 201、削除はすべて 204.
 var (
-	identityOKCreate = []int{200, 201}
-	identityOKRead   = []int{200}
-	identityOKDelete = []int{200, 204}
+	identityOK            = []int{200}
+	identityOKCredCreate  = []int{201}
+	identityOKDelete      = []int{204}
+	identityTokenIssued   = http.StatusCreated
+	identityTokenRejected = http.StatusUnauthorized
 )
+
+// IdentityTokenRole はトークンの発行を許す標準のロールの名前.
+const IdentityTokenRole = "gmo-identity"
 
 // SubUserRole はサブユーザーに紐づくロール.
 type SubUserRole struct {
@@ -49,20 +58,10 @@ type Permission struct {
 
 // Credential は EC2 形式（S3 互換のアクセスキー）のクレデンシャル.
 type Credential struct {
-	UserID string `json:"user_id"`
-	// 詳細取得は tenant_id、一覧取得は project_id で返る
-	TenantID  string `json:"tenant_id"`
-	ProjectID string `json:"project_id"`
-	Access    string `json:"access"`
-	Secret    string `json:"secret"`
-}
-
-// Tenant はクレデンシャルのテナント ID を返す.
-func (c Credential) Tenant() string {
-	if c.TenantID != "" {
-		return c.TenantID
-	}
-	return c.ProjectID
+	UserID   string `json:"user_id"`
+	TenantID string `json:"tenant_id"`
+	Access   string `json:"access"`
+	Secret   string `json:"secret"`
 }
 
 type subUserBody struct {
@@ -95,7 +94,7 @@ func (c *ConohaClient) CreateSubUser(ctx context.Context, password string, roles
 
 	body := map[string]any{"user": map[string]any{"password": password, "roles": roles}}
 	var out subUserBody
-	if _, err := client.Post(ctx, client.ServiceURL("sub-users"), body, &out, &gophercloud.RequestOpts{OkCodes: identityOKCreate}); err != nil {
+	if _, err := client.Post(ctx, client.ServiceURL("sub-users"), body, &out, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return nil, fmt.Errorf("failed to create sub-user: %w", err)
 	}
 	return &out.User, nil
@@ -108,10 +107,58 @@ func (c *ConohaClient) GetSubUser(ctx context.Context, id string) (*SubUser, err
 		return nil, err
 	}
 	var out subUserBody
-	if _, err := client.Get(ctx, client.ServiceURL("sub-users", id), &out, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Get(ctx, client.ServiceURL("sub-users", id), &out, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return nil, err
 	}
 	return &out.User, nil
+}
+
+// SubUserPasswordValid は、サブユーザーとしてトークンを発行し、パスワードが今も有効かを確かめる.
+// 発行できれば（201）true、認証に失敗すれば（401）false を返す. それ以外は確かめられなかったとしてエラーを返す.
+// gophercloud のクライアントは 401 でプロバイダ自身を再認証するため通さず、
+// プロバイダのトークンを付けない素の HTTP リクエストで送る. パスワードはログにもエラーにも含めない.
+func (c *ConohaClient) SubUserPasswordValid(ctx context.Context, userID, password string) (bool, error) {
+	client, err := c.requireIdentity()
+	if err != nil {
+		return false, err
+	}
+	body, err := json.Marshal(map[string]any{"auth": map[string]any{
+		"identity": map[string]any{
+			"methods":  []string{"password"},
+			"password": map[string]any{"user": map[string]any{"id": userID, "password": password}},
+		},
+		"scope": map[string]any{"project": map[string]any{"id": c.TenantID}},
+	}})
+	if err != nil {
+		return false, fmt.Errorf("failed to encode the token request: %w", err)
+	}
+	// 本文のサービスカタログは使わないため、nocatalog で省かせる
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.ServiceURL("auth", "tokens")+"?nocatalog", bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("failed to build the token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if ua := c.ProviderClient.UserAgent.Join(); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+
+	tflog.Debug(ctx, "Issuing a token as the sub-user to verify its password.", map[string]any{"id": userID})
+	resp, err := c.ProviderClient.HTTPClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to issue a token as the sub-user: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+
+	switch resp.StatusCode {
+	case identityTokenIssued:
+		return true, nil
+	case identityTokenRejected:
+		return false, nil
+	default:
+		return false, fmt.Errorf("issuing a token as the sub-user returned HTTP %d", resp.StatusCode)
+	}
 }
 
 // UpdateSubUserPassword はサブユーザーのパスワードを変更する.
@@ -123,7 +170,7 @@ func (c *ConohaClient) UpdateSubUserPassword(ctx context.Context, id, password s
 	tflog.Debug(ctx, "Updating sub-user password.", map[string]any{"id": id})
 
 	body := map[string]any{"user": map[string]any{"password": password}}
-	if _, err := client.Put(ctx, client.ServiceURL("sub-users", id), body, nil, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Put(ctx, client.ServiceURL("sub-users", id), body, nil, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return fmt.Errorf("failed to update sub-user password: %w", err)
 	}
 	return nil
@@ -147,7 +194,7 @@ func (c *ConohaClient) changeSubUserRoles(ctx context.Context, id, action string
 	tflog.Debug(ctx, "Changing sub-user roles.", map[string]any{"id": id, "action": action, "roles": roleIDs})
 
 	body := map[string]any{"roles": roleIDs}
-	if _, err := client.Post(ctx, client.ServiceURL("sub-users", id, action), body, nil, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Post(ctx, client.ServiceURL("sub-users", id, action), body, nil, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return fmt.Errorf("failed to %s sub-user roles: %w", action, err)
 	}
 	return nil
@@ -173,7 +220,7 @@ func (c *ConohaClient) CreateRole(ctx context.Context, name string, permissions 
 
 	body := map[string]any{"role": map[string]any{"name": name, "permissions": permissions}}
 	var out roleBody
-	if _, err := client.Post(ctx, client.ServiceURL("sub-users", "roles"), body, &out, &gophercloud.RequestOpts{OkCodes: identityOKCreate}); err != nil {
+	if _, err := client.Post(ctx, client.ServiceURL("sub-users", "roles"), body, &out, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return nil, fmt.Errorf("failed to create role: %w", err)
 	}
 	return &out.Role, nil
@@ -186,7 +233,7 @@ func (c *ConohaClient) GetRole(ctx context.Context, id string) (*Role, error) {
 		return nil, err
 	}
 	var out roleBody
-	if _, err := client.Get(ctx, client.ServiceURL("sub-users", "roles", id), &out, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Get(ctx, client.ServiceURL("sub-users", "roles", id), &out, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return nil, err
 	}
 	return &out.Role, nil
@@ -201,7 +248,7 @@ func (c *ConohaClient) ListRoles(ctx context.Context) ([]Role, error) {
 	var out struct {
 		Roles []Role `json:"roles"`
 	}
-	if _, err := client.Get(ctx, client.ServiceURL("sub-users", "roles"), &out, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Get(ctx, client.ServiceURL("sub-users", "roles"), &out, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return nil, fmt.Errorf("failed to list roles: %w", err)
 	}
 	return out.Roles, nil
@@ -216,7 +263,7 @@ func (c *ConohaClient) UpdateRoleName(ctx context.Context, id, name string) erro
 	tflog.Debug(ctx, "Updating role name.", map[string]any{"id": id, "name": name})
 
 	body := map[string]any{"role": map[string]any{"name": name}}
-	if _, err := client.Put(ctx, client.ServiceURL("sub-users", "roles", id), body, nil, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Put(ctx, client.ServiceURL("sub-users", "roles", id), body, nil, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return fmt.Errorf("failed to update role name: %w", err)
 	}
 	return nil
@@ -240,13 +287,13 @@ func (c *ConohaClient) changeRolePermissions(ctx context.Context, id, action str
 	tflog.Debug(ctx, "Changing role permissions.", map[string]any{"id": id, "action": action, "permissions": permissions})
 
 	body := map[string]any{"permissions": permissions}
-	if _, err := client.Post(ctx, client.ServiceURL("sub-users", "roles", id, action), body, nil, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Post(ctx, client.ServiceURL("sub-users", "roles", id, action), body, nil, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return fmt.Errorf("failed to %s role permissions: %w", action, err)
 	}
 	return nil
 }
 
-// DeleteRole はロールを削除する. サブユーザーに付与されているロールは削除できない.
+// DeleteRole はロールを削除する. サブユーザーに紐づく唯一のロールは削除できない.
 func (c *ConohaClient) DeleteRole(ctx context.Context, id string) error {
 	client, err := c.requireIdentity()
 	if err != nil {
@@ -265,7 +312,7 @@ func (c *ConohaClient) ListPermissions(ctx context.Context) ([]Permission, error
 	var out struct {
 		Permissions []Permission `json:"permissions"`
 	}
-	if _, err := client.Get(ctx, client.ServiceURL("permissions"), &out, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Get(ctx, client.ServiceURL("permissions"), &out, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return nil, fmt.Errorf("failed to list permissions: %w", err)
 	}
 	return out.Permissions, nil
@@ -281,7 +328,7 @@ func (c *ConohaClient) CreateCredential(ctx context.Context, userID, tenantID st
 
 	body := map[string]any{"tenant_id": tenantID}
 	var out credentialBody
-	if _, err := client.Post(ctx, client.ServiceURL("users", userID, "credentials", "OS-EC2"), body, &out, &gophercloud.RequestOpts{OkCodes: identityOKCreate}); err != nil {
+	if _, err := client.Post(ctx, client.ServiceURL("users", userID, "credentials", "OS-EC2"), body, &out, &gophercloud.RequestOpts{OkCodes: identityOKCredCreate}); err != nil {
 		return nil, fmt.Errorf("failed to create credential: %w", err)
 	}
 	return &out.Credential, nil
@@ -294,7 +341,7 @@ func (c *ConohaClient) GetCredential(ctx context.Context, userID, access string)
 		return nil, err
 	}
 	var out credentialBody
-	if _, err := client.Get(ctx, client.ServiceURL("users", userID, "credentials", "OS-EC2", access), &out, &gophercloud.RequestOpts{OkCodes: identityOKRead}); err != nil {
+	if _, err := client.Get(ctx, client.ServiceURL("users", userID, "credentials", "OS-EC2", access), &out, &gophercloud.RequestOpts{OkCodes: identityOK}); err != nil {
 		return nil, err
 	}
 	return &out.Credential, nil
