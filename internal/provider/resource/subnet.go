@@ -231,6 +231,7 @@ type subnetAllocationPoolModel struct {
 
 // ローカルネットワーク用のサブネットに指定できるネットワークアドレスか確かめる.
 // ドキュメントの「ネットワークアドレスの種類」（クラス A・B・C のプライベートアドレスで /21～/27）に従う.
+// OpenAPI 定義は cidr を文字列とだけ書き、この制約を載せていない（否定もしていない）.
 type localSubnetCIDRValidator struct{}
 
 var localSubnetRanges = []netip.Prefix{

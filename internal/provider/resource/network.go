@@ -48,7 +48,7 @@ func (r *networkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a local network (VLAN). The network takes no arguments: ConoHa names it. " +
 			"Up to 10 local networks can be created per ConoHa account. Add a `conohavps_subnet` to it before creating ports. " +
-			"A network cannot be deleted while subnets remain on it.",
+			"A network cannot be deleted while subnets or ports remain on it.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "The ID of the network.",
@@ -154,7 +154,7 @@ func (r *networkResource) Delete(ctx context.Context, req resource.DeleteRequest
 		resp.Diagnostics.AddError(
 			"Failed to delete network resource",
 			"An unexpected error occurred while attempting to delete network resource. "+
-				"A network cannot be deleted while subnets remain on it.\n\n"+
+				"A network cannot be deleted while subnets or ports remain on it.\n\n"+
 				"Error: "+err.Error(),
 		)
 		return
