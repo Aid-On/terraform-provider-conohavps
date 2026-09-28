@@ -1,6 +1,8 @@
 // API サブユーザーのリソースを提供する.
 // サブユーザーは作成時にロールが1つ以上必須で、0 にはできないため、ロールの全体を
 // このリソースが持ち、差分を紐づけ（assign）と紐づけ解除（unassign）で反映する.
+// API はパスワードを返さないため、トークンを発行できるサブユーザーは、読み込みのたびに
+// State のパスワードでトークンを発行して、Terraform の外での変更を検出する.
 
 package resource
 
@@ -40,7 +42,7 @@ type subUserResource struct {
 type subUserResourceModel struct {
 	ID       types.String `tfsdk:"id"`       // サブユーザー ID
 	Name     types.String `tfsdk:"name"`     // サブユーザー名（API が決める）
-	Password types.String `tfsdk:"password"` // パスワード（API から読み戻せない）
+	Password types.String `tfsdk:"password"` // パスワード（API から読み戻せず、トークンの発行で確かめる）
 	Roles    types.Set    `tfsdk:"roles"`    // ロール ID またはロール名
 }
 
@@ -71,7 +73,9 @@ func (r *subUserResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"password": schema.StringAttribute{
 				MarkdownDescription: "The password of the sub-user. Must be 9-70 characters long, use only alphanumeric characters and the symbols `!#$%&?\"'=+-_{}[]^~:;().,/|\\*@`, " +
 					"and contain at least one lowercase letter, one uppercase letter, and one digit or symbol. " +
-					"The API does not return the password, so changes made outside Terraform are not detected. Changing this value updates the password in place.",
+					"The API does not return the password. When the sub-user has the standard role `gmo-identity`, each refresh verifies the password by issuing a token as the sub-user, " +
+					"and a password changed outside Terraform shows up as a change that sets it back. Without `gmo-identity` the password cannot be verified, so such changes are not detected. " +
+					"If the verification cannot complete (for example on a network error or a server error), the stored password is kept and a warning is logged. Changing this value updates the password in place.",
 				Required:  true,
 				Sensitive: true,
 				Validators: []validator.String{
@@ -151,8 +155,8 @@ func (r *subUserResource) Read(ctx context.Context, req resource.ReadRequest, re
 		resp.Diagnostics.Append(data.Roles.ElementsAs(ctx, &prior, false)...)
 	}
 
-	// パスワードは読み戻せないため、State の値をそのまま残す
 	resp.Diagnostics.Append(setSubUserModel(ctx, &data, user, prior)...)
+	data.Password = r.verifiedPassword(ctx, user, data.Password)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -197,6 +201,30 @@ func (r *subUserResource) Update(ctx context.Context, req resource.UpdateRequest
 
 	resp.Diagnostics.Append(setSubUserModel(ctx, &plan, user, want)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// State のパスワードをトークンの発行で確かめ、残す値を返す. パスワードは API から読み戻せないため、
+// 発行が認証で拒否されたとき（Terraform の外で変えられたとき）だけ null にして、設定の値を当て直す差分にする.
+// トークンを発行できるロール（gmo-identity）が無いとき、または確かめられないときは State の値を残す.
+func (r *subUserResource) verifiedPassword(ctx context.Context, user *service.SubUser, password types.String) types.String {
+	if password.IsNull() || password.IsUnknown() {
+		return password
+	}
+	if subUserRoleIndex(user.Roles, service.IdentityTokenRole) < 0 {
+		tflog.Debug(ctx, "Skipping sub-user password verification: the sub-user cannot issue a token.", map[string]any{"id": user.ID})
+		return password
+	}
+	valid, err := r.client.SubUserPasswordValid(ctx, user.ID, password.ValueString())
+	switch {
+	case err != nil:
+		tflog.Warn(ctx, "Could not verify the sub-user password; keeping the stored password.", map[string]any{"id": user.ID, "error": err.Error()})
+		return password
+	case !valid:
+		tflog.Info(ctx, "The sub-user password was changed outside Terraform.", map[string]any{"id": user.ID})
+		return types.StringNull()
+	default:
+		return password
+	}
 }
 
 // サブユーザーのロールを want（ロール ID またはロール名）に合わせる.
