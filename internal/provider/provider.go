@@ -173,6 +173,7 @@ func (p *conohaProvider) DataSources(_ context.Context) []func() datasource.Data
 		d.NewDNSDomainDataSource,
 		d.NewPermissionsDataSource,
 		d.NewImageUsageDataSource,
+		d.NewQoSPolicyDataSource,
 	}
 }
 
@@ -194,5 +195,10 @@ func (p *conohaProvider) Resources(_ context.Context) []func() resource.Resource
 		r.NewObjectStorageContainerResource,
 		r.NewObjectStorageQuotaResource,
 		r.NewImageQuotaResource,
+		r.NewNetworkResource,
+		r.NewSubnetResource,
+		r.NewPortResource,
+		r.NewAdditionalIPResource,
+		r.NewPortAttachmentResource,
 	}
 }

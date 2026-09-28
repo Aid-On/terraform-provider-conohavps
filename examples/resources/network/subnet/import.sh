@@ -1,0 +1,1 @@
+$ terraform import conohavps_subnet.local {{subnet_id}}

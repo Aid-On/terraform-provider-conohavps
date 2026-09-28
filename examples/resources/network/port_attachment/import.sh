@@ -1,0 +1,1 @@
+$ terraform import conohavps_port_attachment.web {{server_id}}/{{port_id}}
