@@ -26,10 +26,10 @@ type ConohaClient struct {
 	ObjectStorageClient *gophercloud.ServiceClient
 	DNSClient           *gophercloud.ServiceClient
 	IdentityClient      *gophercloud.ServiceClient
-	Token              string
-	TenantID           string
-	IdentityEndpoint   string
-	Region             string
+	Token               string
+	TenantID            string
+	IdentityEndpoint    string
+	Region              string
 }
 
 // クライアントの認証を実施する.
