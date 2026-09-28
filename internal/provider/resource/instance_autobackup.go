@@ -63,8 +63,8 @@ func (r *instanceAutoBackupResource) Schema(_ context.Context, _ resource.Schema
 		MarkdownDescription: "Enables auto-backup of the volumes attached to a server. " +
 			"The boot storage volume and, when attached, the additional storage volume are backed up. " +
 			"Destroying this resource disables auto-backup of the server.\n\n" +
-			"The API cannot read back whether auto-backup is enabled or its retention, so this resource keeps the values it applied " +
-			"and only detects that the server itself was deleted. Changes made outside Terraform are not detected. " +
+			"Whether auto-backup is enabled is read from the server's metadata (`backup_status`), so disabling it outside Terraform " +
+			"shows as a change that enables it again. The API does not return the retention, so a retention changed outside Terraform is not detected. " +
 			"The API has no update operation, so changing `schedule` or `retention` disables auto-backup and enables it again.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -173,8 +173,10 @@ func (r *instanceAutoBackupResource) Read(ctx context.Context, req resource.Read
 		"instance_id": state.InstanceID.ValueString(),
 	})
 
-	// 自動バックアップの設定を読む API は無いため、サーバーが消えたことだけを検知する
-	if _, err := r.client.GetInstance(ctx, state.InstanceID.ValueString()); err != nil {
+	// 自動バックアップの状態はサーバーのメタデータ（backup_status）で読む.
+	// 保存期間を読む項目は無いため、保存期間は state の値を保つ
+	server, err := r.client.GetInstance(ctx, state.InstanceID.ValueString())
+	if err != nil {
 		if gophercloud.ResponseCodeIs(err, 404) {
 			resp.State.RemoveResource(ctx)
 			return
@@ -187,7 +189,23 @@ func (r *instanceAutoBackupResource) Read(ctx context.Context, req resource.Read
 		return
 	}
 
+	// Terraform の外（コントロールパネルなど）で無効にされていれば、作り直す差分にする
+	if !autoBackupEnabled(server.Metadata) {
+		tflog.Debug(ctx, "Auto-backup is not enabled on the server; removing it from state.", map[string]any{
+			"instance_id": state.InstanceID.ValueString(),
+		})
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// サーバーのメタデータから、自動バックアップが有効かを判定する.
+// 有効なサーバーには backup_status（"active" など）が載る. 値の一覧はドキュメントに無いため、
+// 空でなければ有効とみなす.
+func autoBackupEnabled(metadata map[string]string) bool {
+	return metadata["backup_status"] != ""
 }
 
 func (r *instanceAutoBackupResource) Update(_ context.Context, _ resource.UpdateRequest, resp *resource.UpdateResponse) {

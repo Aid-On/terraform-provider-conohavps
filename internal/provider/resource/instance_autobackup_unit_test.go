@@ -88,7 +88,15 @@ func newAutoBackupFake(t *testing.T) *autoBackupFake {
 			fakeapi.WriteJSON(w, http.StatusNotFound, map[string]any{"itemNotFound": map[string]any{"message": "server not found"}})
 			return
 		}
-		fakeapi.WriteJSON(w, http.StatusOK, map[string]any{"server": map[string]any{"id": sid, "name": sid, "status": "ACTIVE"}})
+		// 自動バックアップが有効なサーバーは、メタデータに backup_status などが載る（サーバー詳細取得のドキュメント）
+		metadata := map[string]any{"instance_name_tag": sid}
+		if _, ok := f.enabled[sid]; ok {
+			metadata["backup_status"] = "active"
+			metadata["backup_id"] = "vol-boot"
+			metadata["backup_set"] = "6"
+			metadata["backup_rotate"] = "3"
+		}
+		fakeapi.WriteJSON(w, http.StatusOK, map[string]any{"server": map[string]any{"id": sid, "name": sid, "status": "ACTIVE", "metadata": metadata}})
 	})
 	return f
 }
@@ -203,6 +211,27 @@ func TestInstanceAutoBackupResource_Unit(t *testing.T) {
 				Config:      f.config(`  schedule = "weekly"`),
 				PlanOnly:    true,
 				ExpectError: regexp.MustCompile(`must be one of \[daily\]`),
+			},
+			// コントロールパネルなどで無効にされたら、backup_status が消えるので作り直す計画になる
+			{
+				PreConfig: func() {
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					delete(f.enabled, "srv-1")
+				},
+				Config:             f.config("  retention = 30"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			// 適用すると有効に戻る
+			{
+				Config: f.config("  retention = 30"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(addr, plancheck.ResourceActionCreate),
+					},
+				},
+				Check: resource.ComposeTestCheckFunc(f.checkEnabled(30), f.checkLastBody(30)),
 			},
 			// サーバーが消えたら State から外し、作り直す計画になる
 			{
