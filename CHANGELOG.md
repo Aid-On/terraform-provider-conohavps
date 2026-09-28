@@ -9,6 +9,7 @@ BUG FIXES (found on 2026-09-29 by running the resources against the live ConoHa 
 
 DOCS:
 
+* `llms.txt` lists the GPU (L4, H100) and KUSANAGI flavors with their amounts and how their names are read, from the 81 flavors the live flavors API returns; `tools/llmsprices` also checks the GPU and KUSANAGI pages
 * README gains a setup walkthrough (API user, `dev_overrides`, credentials by environment variables, a minimal configuration with an SSH security group) and the pitfalls met on a fresh account
 * `llms.txt` is the entry point for LLMs and agents: provider setup with a minimal HCL example, a link per resource and data source to its doc on GitHub, how flavor names are read, and ConoHa's tax-inclusive prices as read from the pricing pages and spec sheets on 2026-09-28 (hourly rates and monthly caps, prepaid by term, old memory plans, GPU, DB, Windows with SAL, options, QoS policies). ConoHa's own llms.txt lists the pre-March-2025 hourly prices under the new plan names. `go run ./tools/llmsprices` checks that every amount in the file still appears on ConoHa's pages and spec sheets
 

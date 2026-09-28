@@ -8,7 +8,7 @@
 
 - 認証は ConoHa の公開 API ユーザー（テナント ID・ユーザー ID・パスワード）。`provider` ブロックの `tenant_id` `user_id` `password` か、環境変数 `CONOHAVPS_TENANT_ID` `CONOHAVPS_USER_ID` `CONOHAVPS_PASSWORD` で渡す（両方あれば環境変数が使われる）。`region` の既定は `c3j1`、`identity_endpoint` の既定は `https://identity.c3j1.conoha.io/v3`。
 - fork は Registry に無いので `go install .` でビルドし、`~/.terraformrc` の `dev_overrides` で `registry.terraform.io/gmo-internet/conohavps` を `$GOPATH/bin` に向ける（手順は README）。`terraform init` は Registry の v0.1.0 をロックファイルに書くが、実行時は上書き先のバイナリが使われ、その旨の警告が出る。
-- フレーバー名の読み方: `g2l` は Linux、`g2w` は Windows Server、`g2d` は DB サーバー。続く `-t-` は時間課金、`-p-` はまとめトク（前払い）。最後の `c<コア数>m<メモリ GB>` がサイズ（`g2l-t-c4m4` は Linux・時間課金・4 コア・4 GB。512 MB だけ `m512`）。`conohavps_flavor` データソースで名前から ID を引く。
+- フレーバー名の読み方: `g2l` は Linux、`g2w` は Windows Server、`g2d` は DB サーバー。続く `-t-` は時間課金、`-p-` はまとめトク（前払い）。最後の `c<コア数>m<メモリ GB>` がサイズ（`g2l-t-c4m4` は Linux・時間課金・4 コア・4 GB。512 MB だけ `m512`）。GPU は `g<枚数>-<GPU 名>` が続き（`g2l-t-c4m16g1-l4`）、KUSANAGI プランは `-kusanagi` が付く（`g2l-t-c4m8-kusanagi`。エディションは名前に無い）。DB サーバーは `d<ディスク GB>` が付く。2026-09-29 時点でアカウントの flavors API は 81 件を返す。`conohavps_flavor` データソースで名前から ID を引く。
 
 ```hcl
 terraform {
@@ -104,7 +104,7 @@ resource "conohavps_instance" "web" {
 
 ## 料金（2026-09-28 時点、税込み）
 
-出典は ConoHa の料金ページ（https://vps.conoha.jp/pricing/ 、https://vps.conoha.jp/windows/pricing/ ）と、そこからリンクされる仕様書 PDF（https://vps.conoha.jp/pdf/conoha_spec_ja.pdf 、https://vps.conoha.jp/windows/pdf/conoha_ws_spec_ja.pdf 、旧プランは https://vps.conoha.jp/pdf/vswj020-old/conoha_spec_ja.pdf ）。時間単価と GPU の額は仕様書から、それ以外は料金ページから写した。
+出典は ConoHa の料金ページ（https://vps.conoha.jp/pricing/ 、https://vps.conoha.jp/windows/pricing/ ）と、そこからリンクされる仕様書 PDF（https://vps.conoha.jp/pdf/conoha_spec_ja.pdf 、https://vps.conoha.jp/windows/pdf/conoha_ws_spec_ja.pdf 、旧プランは https://vps.conoha.jp/pdf/vswj020-old/conoha_spec_ja.pdf ）。時間単価と L4 の額は仕様書から、H100 は GPU ページから、KUSANAGI は KUSANAGI のページから、それ以外は料金ページから写した。
 
 - 初期費用・データ転送量は無料。時間課金は 1 時間単位で、1 か月使い続けても月額上限を超えない。停止中も削除するまで課金される。
 - まとめトクは 1〜36 か月分を一括前払いし、途中解約できない。下の表は「更新時」の月額（契約更新後も続く価格）。初回契約にはキャンペーンの割引が別に付き、額と期限は時期で変わるので料金ページで見る。
@@ -139,14 +139,36 @@ resource "conohavps_instance" "web" {
 | 96GB | `g2l-p-c24m96` | 44,198円 | 41,984円 | 39,773円 | 38,991円 | 38,491円 | 37,991円 |
 | 128GB | `g2l-p-c40m128` | 58,927円 | 55,976円 | 53,030円 | 51,987円 | 51,321円 | 50,654円 |
 
-### GPU サーバー（NVIDIA L4、時間課金）
+### GPU サーバー（時間課金）
 
-| CPU | SSD | 1 時間 | 月額上限 |
-| --- | --- | --- | --- |
-| 4コア | 100GB | 60.5円 | 36,300円 |
-| 20コア | 100GB | 154.0円 | 90,200円 |
+| GPU | CPU | メモリ | フレーバー名 | 1 時間 | 月額上限 |
+| --- | --- | --- | --- | --- | --- |
+| NVIDIA L4 ×1 | 4コア | 16GB | `g2l-t-c4m16g1-l4` | 60.5円 | 36,300円 |
+| NVIDIA L4 ×1 | 20コア | 128GB | `g2l-t-c20m128g1-l4` | 154.0円 | 90,200円 |
+| NVIDIA H100 ×1 | 22コア | 228GB | `g2l-t-c22m228g1-h100` | 1,398.0円（税抜） | 582,010円（税抜） |
+| NVIDIA H100 ×4 | 88コア | 912GB | `g2l-t-c88m912g4-h100` | 公表なし | 公表なし |
 
-フレーバー名は `conohavps_flavor` の一覧（API の flavors）で確かめる。仕様書にメモリ量とプラン名は載っていない。
+L4 の額は仕様書 PDF の税込み表示。H100 は GPU ページ（https://vps.conoha.jp/gpu/ ）の税抜表示しか無く、そのまま載せた（税込みは 1.1 倍）。H100 は提供終了と案内されているが、フレーバーは残っている。まとめトクのフレーバー（`g2l-p-...`）も 4 つあるが、額は公表されていない。GPU サーバーの帯域は 1 Gbps（QoS `global-i_1000000-o_1000000`）。利用には審査がある。
+
+### KUSANAGI プラン
+
+WordPress 向けの KUSANAGI 専用プラン（https://vps.conoha.jp/kusanagi/ ）。エディション（Business / Premium / Security）は申込時に選び、フレーバー名には出ない。時間課金は月額上限、まとめトクは 1 か月分の額だけが公表されている。
+
+| CPU | メモリ | フレーバー名（時間課金 / まとめトク） | Business 時間課金 | Business 1ヶ月 | Premium 時間課金 | Premium 1ヶ月 | Security 時間課金 | Security 1ヶ月 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1コア | 2GB | `g2l-t-c1m2-kusanagi` / `g2l-p-c1m2-kusanagi` | 4,510円 | 4,400円 | 34,210円 | 34,100円 | 122,210円 | 122,100円 |
+| 2コア | 4GB | `g2l-t-c2m4-kusanagi` / `g2l-p-c2m4-kusanagi` | 8,360円 | 8,140円 | 61,820円 | 61,600円 | 123,420円 | 123,200円 |
+| 2コア | 8GB | `g2l-t-c2m8-kusanagi` / `g2l-p-c2m8-kusanagi` | 10,230円 | 9,790円 | 63,690円 | 63,250円 | 125,290円 | 124,850円 |
+| 4コア | 8GB | `g2l-t-c4m8-kusanagi` / `g2l-p-c4m8-kusanagi` | 12,760円 | 12,320円 | 84,040円 | 83,600円 | 125,840円 | 125,400円 |
+| 4コア | 16GB | `g2l-t-c4m16-kusanagi` / `g2l-p-c4m16-kusanagi` | 16,610円 | 15,730円 | 87,890円 | 87,010円 | 129,690円 | 128,810円 |
+| 6コア | 12GB | `g2l-t-c6m12-kusanagi` / `g2l-p-c6m12-kusanagi` | 17,270円 | 16,610円 | 107,360円 | 106,700円 | 128,260円 | 127,600円 |
+| 6コア | 24GB | `g2l-t-c6m24-kusanagi` / `g2l-p-c6m24-kusanagi` | 22,990円 | 21,780円 | 113,080円 | 111,870円 | 133,980円 | 132,770円 |
+| 8コア | 16GB | `g2l-t-c8m16-kusanagi` / `g2l-p-c8m16-kusanagi` | 21,780円 | 20,900円 | 130,680円 | 129,800円 | 130,680円 | 129,800円 |
+| 8コア | 32GB | `g2l-t-c8m32-kusanagi` / `g2l-p-c8m32-kusanagi` | 29,480円 | 27,830円 | 138,380円 | 136,730円 | 138,380円 | 136,730円 |
+| 16コア | 32GB | `g2l-t-c16m32-kusanagi` / `g2l-p-c16m32-kusanagi` | 35,530円 | 33,770円 | 181,060円 | 179,300円 | 140,360円 | 138,600円 |
+| 16コア | 64GB | `g2l-t-c16m64-kusanagi` / `g2l-p-c16m64-kusanagi` | 50,930円 | 47,740円 | 196,460円 | 193,270円 | 155,760円 | 152,570円 |
+| 32コア | 64GB | `g2l-t-c32m64-kusanagi` / `g2l-p-c32m64-kusanagi` | 59,180円 | 55,660円 | 243,320円 | 239,800円 | 159,720円 | 156,200円 |
+| 64コア | 128GB | `g2l-t-c64m128-kusanagi` / `g2l-p-c64m128-kusanagi` | 102,300円 | 95,260円 | 326,040円 | 319,000円 | 198,440円 | 191,400円 |
 
 ### 旧メモリプラン（8〜64 GB。2025 年 3 月の刷新で 12〜96 GB に置き換わった。既存サーバー向け）
 

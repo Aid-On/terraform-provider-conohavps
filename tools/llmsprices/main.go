@@ -32,6 +32,8 @@ type source struct {
 var conohaSources = []source{
 	{url: "https://vps.conoha.jp/pricing/"},
 	{url: "https://vps.conoha.jp/windows/pricing/"},
+	{url: "https://vps.conoha.jp/gpu/"},
+	{url: "https://vps.conoha.jp/kusanagi/"},
 	{url: "https://vps.conoha.jp/pdf/conoha_spec_ja.pdf", pdf: true},
 	{url: "https://vps.conoha.jp/windows/pdf/conoha_ws_spec_ja.pdf", pdf: true},
 	{url: "https://vps.conoha.jp/pdf/vswj020-old/conoha_spec_ja.pdf", pdf: true},
