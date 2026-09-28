@@ -49,7 +49,7 @@ func (r *volumeAttachmentResource) Metadata(_ context.Context, req resource.Meta
 
 func (r *volumeAttachmentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Attaches an additional storage volume to a server. " +
+		MarkdownDescription: "Attaches an additional storage volume to a server. The volume is not added to the server's `block_device`, which keeps only the volumes given when the server was created. " +
 			"The server must be stopped when the volume is attached and detached, and only one additional storage volume can be attached to a server. " +
 			"A volume that is still being processed cannot be attached until the processing finishes. " +
 			"A boot storage volume cannot be detached.",

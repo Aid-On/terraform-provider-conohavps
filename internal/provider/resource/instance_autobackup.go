@@ -64,9 +64,8 @@ func (r *instanceAutoBackupResource) Schema(_ context.Context, _ resource.Schema
 			"Changing `retention` updates it in place. " +
 			"Destroying this resource cancels auto-backup of the server (both daily and weekly); backups already taken are not deleted, " +
 			"and `conohavps_backups` still lists them.\n\n" +
-			"Whether auto-backup is enabled is read from the server's metadata (`backup_status`), so cancelling it outside Terraform " +
-			"shows as a change that enables it again. No API returns the retention, so `retention` is kept as Terraform last set it, " +
-			"and a retention changed outside Terraform is not detected.",
+			"Whether auto-backup is enabled and its retention are read from the server's metadata (`daily_backup_status` and " +
+			"`daily_backup_retention`), so cancelling it or changing the retention outside Terraform shows as a change.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "The ID of the server (same as `instance_id`).",
@@ -96,7 +95,7 @@ func (r *instanceAutoBackupResource) Schema(_ context.Context, _ resource.Schema
 			},
 			"retention": schema.Int64Attribute{
 				MarkdownDescription: "The number of days daily backups are kept, from 14 to 30. Defaults to 14. " +
-					"Changing this value updates it in place. No API returns this value, so it is not refreshed from ConoHa.",
+					"Changing this value updates it in place. It is read back from the server's metadata.",
 				Optional: true,
 				Computed: true,
 				Default:  int64default.StaticInt64(autoBackupDefaultRetention),
@@ -170,8 +169,7 @@ func (r *instanceAutoBackupResource) Read(ctx context.Context, req resource.Read
 		"instance_id": state.InstanceID.ValueString(),
 	})
 
-	// 自動バックアップの状態はサーバーのメタデータ（backup_status）で読む.
-	// 保存期間を読む項目は無いため、保存期間は state の値を保つ
+	// 自動バックアップの状態と保存期間はサーバーのメタデータ（daily_backup_status・daily_backup_retention）で読む
 	server, err := r.client.GetInstance(ctx, state.InstanceID.ValueString())
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, 404) {
@@ -194,6 +192,9 @@ func (r *instanceAutoBackupResource) Read(ctx context.Context, req resource.Read
 		resp.State.RemoveResource(ctx)
 		return
 	}
+	if retention := autoBackupRetention(server.Metadata); retention != 0 {
+		state.Retention = types.Int64Value(retention)
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -201,8 +202,19 @@ func (r *instanceAutoBackupResource) Read(ctx context.Context, req resource.Read
 // サーバーのメタデータから、自動バックアップが有効かを判定する.
 // 有効なサーバーには backup_status（"active" など）が載る. このキーと値の一覧は API 仕様に無く、
 // サーバー詳細取得のドキュメントの応答例にだけ載るため、空でなければ有効とみなす.
+// 自動バックアップが有効なサーバーは、メタデータに daily_backup_status = "active" と daily_backup_retention（日数）が載る.
+// 解約すると daily_backup_status は "cancelled" になり、daily_backup_retention は残る（2026-09-29 実測）.
 func autoBackupEnabled(metadata map[string]string) bool {
-	return metadata["backup_status"] != ""
+	return metadata["daily_backup_status"] == "active"
+}
+
+// メタデータの保存期間. 無い・読めない・範囲外なら 0.
+func autoBackupRetention(metadata map[string]string) int64 {
+	v, err := strconv.ParseInt(metadata["daily_backup_retention"], 10, 64)
+	if err != nil || v < 14 || v > 30 {
+		return 0
+	}
+	return v
 }
 
 func (r *instanceAutoBackupResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -270,32 +282,17 @@ func (r *instanceAutoBackupResource) Delete(ctx context.Context, req resource.De
 	})
 }
 
-// `<instance_id>` または `<instance_id>/<retention>` の形式の ID から取り込む.
-// 保存期間は API から読み戻せないため、ID で渡されなければ既定値の 14 とする.
+// サーバー ID から取り込む. 保存期間は Read がサーバーのメタデータから読む.
 func (r *instanceAutoBackupResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	instanceID, retentionText, hasRetention := strings.Cut(req.ID, "/")
-	retention := int64(autoBackupDefaultRetention)
-	if hasRetention {
-		v, err := strconv.ParseInt(retentionText, 10, 64)
-		if err != nil || v < 14 || v > 30 {
-			resp.Diagnostics.AddError(
-				"Invalid import ID",
-				fmt.Sprintf("Expected an import ID in the form <instance_id> or <instance_id>/<retention> with retention from 14 to 30, got: %q.", req.ID),
-			)
-			return
-		}
-		retention = v
-	}
-	if instanceID == "" {
+	if req.ID == "" || strings.Contains(req.ID, "/") {
 		resp.Diagnostics.AddError(
 			"Invalid import ID",
-			fmt.Sprintf("Expected an import ID in the form <instance_id> or <instance_id>/<retention>, got: %q.", req.ID),
+			fmt.Sprintf("Expected the ID of the server, got: %q.", req.ID),
 		)
 		return
 	}
-
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), instanceID)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("instance_id"), instanceID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("instance_id"), req.ID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("schedule"), autoBackupDefaultSchedule)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("retention"), retention)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("retention"), int64(autoBackupDefaultRetention))...)
 }

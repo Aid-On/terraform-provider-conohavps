@@ -2,7 +2,6 @@ resource "conohavps_dns_domain" "example" {
   name        = "example.com."
   ttl         = 3600
   email       = "hostmaster@example.com"
-  description = "Company website"
 }
 
 resource "conohavps_dns_record" "www" {
@@ -11,7 +10,6 @@ resource "conohavps_dns_record" "www" {
   type        = "A"
   data        = "192.0.2.10"
   ttl         = 300
-  description = "Web server"
 }
 
 resource "conohavps_dns_record" "mx" {

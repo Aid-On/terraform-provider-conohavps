@@ -124,8 +124,9 @@ func (r *instanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				},
 			},
 			"block_device": schema.ListNestedAttribute{
-				MarkdownDescription: "The block device mapping for the instance.",
-				Required:            true,
+				MarkdownDescription: "The block device mapping for the instance: the volumes given when the server is created. " +
+					"A volume attached later with `conohavps_volume_attachment` is not listed here, so it does not force the server to be recreated.",
+				Required: true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"uuid": schema.StringAttribute{
@@ -423,15 +424,31 @@ func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 		state.AdminPass = types.StringValue(instance.AdminPass)
 	}
 
-	// ブロックデバイス情報を更新
-	blockDevices := make([]attr.Value, len(instance.AttachedVolumes))
-	for i, bd := range instance.AttachedVolumes {
+	// ブロックデバイス情報を更新.
+	// サーバーに付いているボリュームのうち、この設定で作成時に渡したものだけを写す.
+	// conohavps_volume_attachment で後から付けた追加 SSD まで写すと block_device に差分が出て、サーバーが作り直しになる
+	var declared []string
+	if !state.BlockDevice.IsNull() {
+		var bdmList []blockDeviceModel
+		if diag := state.BlockDevice.ElementsAs(ctx, &bdmList, false); !diag.HasError() {
+			for _, bdm := range bdmList {
+				declared = append(declared, bdm.UUID.ValueString())
+			}
+		}
+	}
+	attached := make([]string, 0, len(instance.AttachedVolumes))
+	for _, v := range instance.AttachedVolumes {
+		attached = append(attached, v.ID)
+	}
+	kept := keepDeclaredBlockDevices(declared, attached)
+	blockDevices := make([]attr.Value, len(kept))
+	for i, id := range kept {
 		bdObj, _ := types.ObjectValue(
 			map[string]attr.Type{
 				"uuid": types.StringType,
 			},
 			map[string]attr.Value{
-				"uuid": types.StringValue(bd.ID),
+				"uuid": types.StringValue(id),
 			},
 		)
 		blockDevices[i] = bdObj
@@ -887,4 +904,24 @@ func (r *instanceResource) handlePowerStateChange(ctx context.Context, instanceI
 	}
 
 	return nil
+}
+
+// keepDeclaredBlockDevices は、サーバーに付いているボリューム（attached）のうち state の block_device に挙がっているもの（declared）だけを
+// state の順序で返す. state に無いもの（conohavps_volume_attachment で付けた追加 SSD）は写さない.
+// state が空（import 直後）なら、付いているものを全部返す.
+func keepDeclaredBlockDevices(declared, attached []string) []string {
+	if len(declared) == 0 {
+		return attached
+	}
+	isAttached := make(map[string]bool, len(attached))
+	for _, id := range attached {
+		isAttached[id] = true
+	}
+	kept := make([]string, 0, len(declared))
+	for _, id := range declared {
+		if isAttached[id] {
+			kept = append(kept, id)
+		}
+	}
+	return kept
 }

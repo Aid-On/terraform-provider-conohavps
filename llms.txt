@@ -53,7 +53,7 @@ resource "conohavps_instance" "web" {
 
 ### リソース
 
-- [conohavps_instance](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/instance.md): サーバー本体。`flavor_id`・`block_device`（ブートボリューム）・`instance_name_tag` が必須。`power_state` で起動・停止
+- [conohavps_instance](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/instance.md): サーバー本体。`flavor_id`・`block_device`（ブートボリューム）・`instance_name_tag` が必須。`power_state` で起動・停止。追加 SSD は `conohavps_volume_attachment` で付け、`block_device` には書かない
 - [conohavps_keypair](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/keypair.md): SSH 公開鍵の登録。`key_name` でサーバーに渡す
 - [conohavps_port_attachment](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/port_attachment.md): ポート（ローカルネットワークの `conohavps_port` か `conohavps_additional_ip`）をサーバーに接続する。サーバーは ACTIVE か SHUTOFF
 - [conohavps_instance_autobackup](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/instance_autobackup.md): サーバーのボリュームの日次自動バックアップ。`retention` は 14〜30 日（有料オプション）
@@ -65,7 +65,7 @@ resource "conohavps_instance" "web" {
 - [conohavps_network](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/network.md): ローカルネットワーク（VLAN）。引数なし、アカウントあたり 10 個まで
 - [conohavps_subnet](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/subnet.md): ローカルネットワークのサブネット。ポートが残っていると消せない
 - [conohavps_port](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/port.md): ローカルネットワーク上のポート。`qos_policy_id` で帯域を変える
-- [conohavps_additional_ip](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/additional_ip.md): 追加 IP（`ip_count` 1〜16）。1 つのポートに載り、`conohavps_port_attachment` でサーバーに付ける。`qos_policy_id` で帯域拡張
+- [conohavps_additional_ip](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/additional_ip.md): 追加 IP（`ip_count` 1〜16）。1 つのポートに載り、`conohavps_port_attachment` でサーバーに付ける。`qos_policy_id` で帯域拡張。契約から 30 日間は解約できない
 - [conohavps_lb_loadbalancer](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/lb_loadbalancer.md): ロードバランサー本体（VIP）。有料オプション
 - [conohavps_lb_listener](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/lb_listener.md): リスナー（受け付けるプロトコルとポート）
 - [conohavps_lb_pool](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/lb_pool.md): プール（分散方式）
@@ -78,7 +78,7 @@ resource "conohavps_instance" "web" {
 - [conohavps_image_quota](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/image_quota.md): イメージ保存容量（`image_size_gb`、550 以上 500 刻み）。課金が変わる
 - [conohavps_role](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/role.md): API サブユーザーに付ける権限の集合
 - [conohavps_subuser](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/subuser.md): API サブユーザー。ロールが許す操作だけ呼べる
-- [conohavps_credential](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/credential.md): API ユーザーの EC2 形式の認証情報（アクセスキーとシークレット）。オブジェクトストレージの S3 互換クライアント用
+- [conohavps_credential](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/credential.md): API ユーザーの EC2 形式の認証情報（アクセスキーとシークレット）。オブジェクトストレージの S3 互換クライアント用。自分（トークンのユーザー）の分だけ扱え、サブユーザーの分は 403
 
 ### データソース
 
@@ -89,6 +89,18 @@ resource "conohavps_instance" "web" {
 - [conohavps_dns_domain](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/dns_domain.md): ConoHa DNS のドメインを名前で引く
 - [conohavps_image_usage](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/image_usage.md): イメージ保存容量の使用量。`conohavps_image_quota` はこれ未満にできない
 - [conohavps_permissions](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/permissions.md): `conohavps_role` に付けられる権限の一覧
+
+## ConoHa 側の制約（2026-09-29 に実アカウントで確認）
+
+| 制約 | 内容 |
+| --- | --- |
+| サーバー台数 | 作ったばかりのアカウントでは 2 台目の作成が `Number of flavors (plans) allowed per project is limit` で断られる。上限の引き上げは ConoHa に申請する |
+| 追加 IP | 契約から 30 日間は解約できない（`this port cannot be deleted because it has not been 30 days since purchase`）。試しに 1 個作ると最低 1 か月分（424円）かかる |
+| 追加 SSD の接続 | `conohavps_volume_attachment` はサーバーが SHUTOFF のときだけ付け外しできる |
+| 自動バックアップ | 有効化の直後や接続変更の直後は 409 `conflicting request` になることがある。少し待って apply し直す |
+| セキュリティグループ | サーバーに何も付けないと `default`（同じ SG 内からの通信だけ許可）になり、SSH も通らない。`IPv4v6-SSH` などの既定 SG を `security_group` に付ける |
+| 認証情報 | API ユーザーは自分の認証情報しか作れない。サブユーザーの分を作ると 403 |
+| DNS の description | ConoHa の DNS API は description を保存も返却もしない。プロバイダにも属性は無い |
 
 ## 料金（2026-09-28 時点、税込み）
 
@@ -196,7 +208,7 @@ Windows Server のライセンス（月額、ユーザー数分）: リモート
 | 追加 SSD 10,000GB | 同上 `size = 10000` | 124.4円 | 89,540円 |
 | ブートストレージ容量追加 +100GB | ブートの `conohavps_volume` を `size = 200` に。API 限定で、512 MB プランとまとめトクでは使えない | 2.6円 | 1,513円 |
 | ブートストレージ容量追加 +400GB | 同上 `size = 500` | 6.1円 | 4,356円 |
-| 追加 IP（1 個あたり） | `conohavps_additional_ip`（`ip_count` 1〜16） | 0.6円 | 424円 |
+| 追加 IP（1 個あたり） | `conohavps_additional_ip`（`ip_count` 1〜16）。契約から 30 日間は解約不可 | 0.6円 | 424円 |
 | ロードバランサー | `conohavps_lb_loadbalancer`（リスナー・プール・メンバー・ヘルスモニターは無料） | 1.7円 | 1,210円 |
 | イメージ保存（追加 500GB ごと） | `conohavps_image_quota`（`image_size_gb` は 550 以上、500 刻み）。50GB まで無料。ボリュームのスナップショットもこの容量を使う | 2.4円 | 1,650円 |
 | 自動バックアップ（容量 100GB） | `conohavps_instance_autobackup`（`retention` 14〜30 日）。512 MB プランでは使えない | 0.7円 | 363円 |

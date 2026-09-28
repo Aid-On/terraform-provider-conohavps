@@ -36,7 +36,7 @@ output "secret_key" {
 
 ### Required
 
-- `user_id` (String) The ID of the API user that owns the credential. Changing this value will force the credential to be recreated.
+- `user_id` (String) The ID of the API user that owns the credential. It must be the API user the provider authenticates as: ConoHa refuses to manage another user's credentials (403), so a `conohavps_subuser` cannot be given a credential this way. Changing this value will force the credential to be recreated.
 
 ### Optional
 

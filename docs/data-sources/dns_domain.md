@@ -34,7 +34,6 @@ resource "conohavps_dns_record" "www" {
 
 ### Read-Only
 
-- `description` (String) The description of the domain, or null if it has none.
 - `email` (String) The contact email address of the domain.
 - `id` (String) The ID (UUID) of the domain.
 - `project_id` (String) The tenant ID that owns the domain, if ConoHa DNS returns it.

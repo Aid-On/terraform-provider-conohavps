@@ -59,8 +59,10 @@ func (r *credentialResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				},
 			},
 			"user_id": schema.StringAttribute{
-				MarkdownDescription: "The ID of the API user that owns the credential. Changing this value will force the credential to be recreated.",
-				Required:            true,
+				MarkdownDescription: "The ID of the API user that owns the credential. It must be the API user the provider authenticates as: " +
+					"ConoHa refuses to manage another user's credentials (403), so a `conohavps_subuser` cannot be given a credential this way. " +
+					"Changing this value will force the credential to be recreated.",
+				Required: true,
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 				},
@@ -121,7 +123,8 @@ func (r *credentialResource) Create(ctx context.Context, req resource.CreateRequ
 	if err != nil {
 		tflog.Error(ctx, "Failed to create credential.", map[string]any{"error": err.Error()})
 		resp.Diagnostics.AddError("Failed to create credential resource",
-			"An unexpected error occurred while attempting to create credential resource. An API user can have at most 3 credentials.\n\nError: "+err.Error())
+			"An unexpected error occurred while attempting to create credential resource. An API user can have at most 3 credentials, "+
+				"and ConoHa only lets an API user manage its own credentials: creating one for another user (such as a conohavps_subuser) is refused with 403.\n\nError: "+err.Error())
 		return
 	}
 

@@ -16,7 +16,6 @@ resource "conohavps_dns_domain" "example" {
   name        = "example.com."
   ttl         = 3600
   email       = "hostmaster@example.com"
-  description = "Company website"
 }
 
 resource "conohavps_dns_record" "www" {
@@ -25,7 +24,6 @@ resource "conohavps_dns_record" "www" {
   type        = "A"
   data        = "192.0.2.10"
   ttl         = 300
-  description = "Web server"
 }
 
 resource "conohavps_dns_record" "mx" {
@@ -59,7 +57,6 @@ resource "conohavps_dns_record" "sip" {
 
 ### Optional
 
-- `description` (String) A free-text description of the record. Changing this value will update the record.
 - `port` (Number) The port number of the record. Required for `SRV`, and not allowed for other types. Changing this value will update the record.
 - `priority` (Number) The priority of the record. Required for `MX` and `SRV`, and not allowed for other types. Changing this value will update the record.
 - `ttl` (Number) The TTL of the record in seconds. If omitted, ConoHa DNS chooses it, and removing it from the configuration keeps the current value. Changing this value will update the record.

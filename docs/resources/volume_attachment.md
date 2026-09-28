@@ -2,12 +2,12 @@
 page_title: "conohavps_volume_attachment Resource - terraform-provider-conohavps"
 subcategory: "Volume"
 description: |-
-  Attaches an additional storage volume to a server. The server must be stopped when the volume is attached and detached, and only one additional storage volume can be attached to a server. A volume that is still being processed cannot be attached until the processing finishes. A boot storage volume cannot be detached.
+  Attaches an additional storage volume to a server. The volume is not added to the server's block_device, which keeps only the volumes given when the server was created. The server must be stopped when the volume is attached and detached, and only one additional storage volume can be attached to a server. A volume that is still being processed cannot be attached until the processing finishes. A boot storage volume cannot be detached.
 ---
 
 # conohavps_volume_attachment (Resource)
 
-Attaches an additional storage volume to a server. The server must be stopped when the volume is attached and detached, and only one additional storage volume can be attached to a server. A volume that is still being processed cannot be attached until the processing finishes. A boot storage volume cannot be detached.
+Attaches an additional storage volume to a server. The volume is not added to the server's `block_device`, which keeps only the volumes given when the server was created. The server must be stopped when the volume is attached and detached, and only one additional storage volume can be attached to a server. A volume that is still being processed cannot be attached until the processing finishes. A boot storage volume cannot be detached.
 
 ## Example Usage
 

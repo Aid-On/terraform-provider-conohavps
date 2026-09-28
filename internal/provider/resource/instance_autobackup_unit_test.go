@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -24,16 +25,17 @@ import (
 // 自動バックアップの状態を持つ偽の API.
 type autoBackupFake struct {
 	*fakeapi.Server
-	mu      sync.Mutex
-	servers map[string]bool
-	enabled map[string]float64 // サーバー ID → 保存期間
-	bodies  []map[string]any   // 有効化のリクエストの本文
-	updates []map[string]any   // 保存期間の変更のリクエストの本文
-	calls   []string           // 有効化・保存期間の変更・解約の呼び出し順
+	mu        sync.Mutex
+	servers   map[string]bool
+	enabled   map[string]float64 // サーバー ID → 保存期間
+	cancelled map[string]bool    // 解約したサーバー
+	bodies    []map[string]any   // 有効化のリクエストの本文
+	updates   []map[string]any   // 保存期間の変更のリクエストの本文
+	calls     []string           // 有効化・保存期間の変更・解約の呼び出し順
 }
 
 func newAutoBackupFake(t *testing.T) *autoBackupFake {
-	f := &autoBackupFake{Server: fakeapi.New(t), servers: map[string]bool{"srv-1": true}, enabled: map[string]float64{}}
+	f := &autoBackupFake{Server: fakeapi.New(t), servers: map[string]bool{"srv-1": true}, enabled: map[string]float64{}, cancelled: map[string]bool{}}
 
 	f.Mux.HandleFunc("POST /block-storage/v3/tenant/backups", func(w http.ResponseWriter, r *http.Request) {
 		if !fakeapi.Authorized(w, r) {
@@ -102,6 +104,7 @@ func newAutoBackupFake(t *testing.T) *autoBackupFake {
 			return
 		}
 		delete(f.enabled, sid)
+		f.cancelled[sid] = true
 		f.calls = append(f.calls, "disable")
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -117,13 +120,15 @@ func newAutoBackupFake(t *testing.T) *autoBackupFake {
 			fakeapi.WriteJSON(w, http.StatusNotFound, map[string]any{"itemNotFound": map[string]any{"message": "server not found"}})
 			return
 		}
-		// 自動バックアップが有効なサーバーは、メタデータに backup_status などが載る（サーバー詳細取得のドキュメントの応答例. API 仕様には定義が無い）
+		// 自動バックアップが有効なサーバーは、メタデータに daily_backup_status と daily_backup_retention が載る（2026-09-29 の実 API で確認. API 仕様には定義が無い）
 		metadata := map[string]any{"instance_name_tag": sid}
-		if _, ok := f.enabled[sid]; ok {
-			metadata["backup_status"] = "active"
-			metadata["backup_id"] = "vol-boot"
-			metadata["backup_set"] = "6"
-			metadata["backup_rotate"] = "3"
+		if retention, ok := f.enabled[sid]; ok {
+			metadata["daily_backup_status"] = "active"
+			metadata["daily_backup_retention"] = strconv.Itoa(int(retention))
+		} else if f.cancelled[sid] {
+			// 解約後も daily_backup_status = "cancelled" と保存期間がメタデータに残る
+			metadata["daily_backup_status"] = "cancelled"
+			metadata["daily_backup_retention"] = "14"
 		}
 		fakeapi.WriteJSON(w, http.StatusOK, map[string]any{"server": map[string]any{"id": sid, "name": sid, "status": "ACTIVE", "metadata": metadata}})
 	})
@@ -253,11 +258,11 @@ func TestInstanceAutoBackupResource_Unit(t *testing.T) {
 					f.checkCalls("enable", "update"),
 				),
 			},
-			// `<instance_id>/<retention>` で保存期間ごと取り込む
+			// サーバー ID で取り込む. 保存期間はサーバーのメタデータから読む
 			{
 				ResourceName:      addr,
 				ImportState:       true,
-				ImportStateId:     "srv-1/30",
+				ImportStateId:     "srv-1",
 				ImportStateVerify: true,
 			},
 			// 保存期間は 14〜30 日
@@ -340,8 +345,8 @@ func TestInstanceAutoBackupResource_InvalidImportID(t *testing.T) {
 			Config:        f.config(""),
 			ResourceName:  "conohavps_instance_autobackup.test",
 			ImportState:   true,
-			ImportStateId: "srv-1/7",
-			ExpectError:   regexp.MustCompile(`retention from 14 to 30`),
+			ImportStateId: "srv-1/30",
+			ExpectError:   regexp.MustCompile(`Expected the ID of the server`),
 		}},
 	})
 }

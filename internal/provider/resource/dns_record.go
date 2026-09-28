@@ -50,16 +50,15 @@ type DNSRecordResource struct {
 
 // DNS のレコードのリソースモデル.
 type DNSRecordResourceModel struct {
-	ID          types.String `tfsdk:"id"`          // レコード ID
-	DomainID    types.String `tfsdk:"domain_id"`   // ドメイン ID
-	Name        types.String `tfsdk:"name"`        // レコード名（末尾にピリオド）
-	Type        types.String `tfsdk:"type"`        // レコードタイプ
-	Data        types.String `tfsdk:"data"`        // レコード値
-	Priority    types.Int64  `tfsdk:"priority"`    // 優先度（MX・SRV）
-	Weight      types.Int64  `tfsdk:"weight"`      // 重み（SRV）
-	Port        types.Int64  `tfsdk:"port"`        // ポート番号（SRV）
-	TTL         types.Int64  `tfsdk:"ttl"`         // TTL（秒）
-	Description types.String `tfsdk:"description"` // 説明
+	ID       types.String `tfsdk:"id"`        // レコード ID
+	DomainID types.String `tfsdk:"domain_id"` // ドメイン ID
+	Name     types.String `tfsdk:"name"`      // レコード名（末尾にピリオド）
+	Type     types.String `tfsdk:"type"`      // レコードタイプ
+	Data     types.String `tfsdk:"data"`      // レコード値
+	Priority types.Int64  `tfsdk:"priority"`  // 優先度（MX・SRV）
+	Weight   types.Int64  `tfsdk:"weight"`    // 重み（SRV）
+	Port     types.Int64  `tfsdk:"port"`      // ポート番号（SRV）
+	TTL      types.Int64  `tfsdk:"ttl"`       // TTL（秒）
 }
 
 func (r *DNSRecordResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -137,14 +136,6 @@ func (r *DNSRecordResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				},
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
-				},
-			},
-			"description": schema.StringAttribute{
-				MarkdownDescription: "A free-text description of the record. Changing this value will update the record.",
-				Optional:            true,
-				Validators: []validator.String{
-					// API は空の説明を説明なしと同じに返すため、空文字は受け付けない
-					stringvalidator.LengthAtLeast(1),
 				},
 			},
 		},
@@ -359,13 +350,12 @@ func (r *DNSRecordResource) ImportState(ctx context.Context, req resource.Import
 // 外れた説明は空文字を送って消す. ttl は値が未定（作成時に設定が無い）なら送らない.
 func (m *DNSRecordResourceModel) opts(state *DNSRecordResourceModel) service.DNSRecordOpts {
 	o := service.DNSRecordOpts{
-		Name:        m.Name.ValueString(),
-		Type:        m.Type.ValueString(),
-		Data:        m.Data.ValueString(),
-		Priority:    m.Priority.ValueInt64Pointer(),
-		Weight:      m.Weight.ValueInt64Pointer(),
-		Port:        m.Port.ValueInt64Pointer(),
-		Description: m.Description.ValueStringPointer(),
+		Name:     m.Name.ValueString(),
+		Type:     m.Type.ValueString(),
+		Data:     m.Data.ValueString(),
+		Priority: m.Priority.ValueInt64Pointer(),
+		Weight:   m.Weight.ValueInt64Pointer(),
+		Port:     m.Port.ValueInt64Pointer(),
 	}
 	if !m.TTL.IsUnknown() {
 		o.TTL = m.TTL.ValueInt64Pointer()
@@ -385,7 +375,6 @@ func (m *DNSRecordResourceModel) opts(state *DNSRecordResourceModel) service.DNS
 			o.Null = append(o.Null, f.key)
 		}
 	}
-	o.Description = dnsDescriptionOpt(m.Description, state.Description)
 	return o
 }
 
@@ -406,7 +395,6 @@ func (m *DNSRecordResourceModel) fromAPI(rec *service.DNSRecord) {
 	m.Weight = types.Int64PointerValue(rec.Weight)
 	m.Port = types.Int64PointerValue(rec.Port)
 	m.TTL = types.Int64PointerValue(rec.TTL)
-	m.Description = dnsDescriptionValue(rec.Description)
 }
 
 // 2つのレコード値が同じものを指すか.

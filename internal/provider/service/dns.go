@@ -21,15 +21,14 @@ const dnsListPageSize = 100
 // DNSDomain は DNS に登録したドメイン.
 // ID は OpenAPI 仕様では "id"、公開 API の HTML ドキュメントでは "uuid" で返るため、両方を読む.
 type DNSDomain struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	ProjectID   string `json:"project_id"`
-	Serial      int64  `json:"serial"`
-	TTL         int64  `json:"ttl"`
-	Email       string `json:"email"`
-	Description string `json:"description"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	ProjectID string `json:"project_id"`
+	Serial    int64  `json:"serial"`
+	TTL       int64  `json:"ttl"`
+	Email     string `json:"email"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // UnmarshalJSON は "id" が無ければ "uuid" を ID として読む.
@@ -50,37 +49,34 @@ func (d *DNSDomain) UnmarshalJSON(b []byte) error {
 }
 
 // DNSDomainCreateOpts はドメイン作成のリクエスト本文.
+// description は OpenAPI 仕様にはあるが、ConoHa の API は保存も返却もしない（2026-09-29 実測）ため持たない.
 type DNSDomainCreateOpts struct {
-	Name        string `json:"name"`
-	TTL         int64  `json:"ttl"`
-	Email       string `json:"email"`
-	Description string `json:"description,omitempty"`
+	Name  string `json:"name"`
+	TTL   int64  `json:"ttl"`
+	Email string `json:"email"`
 }
 
 // DNSDomainUpdateOpts はドメイン更新のリクエスト本文.
-// Description は nil なら送らず、空文字なら説明を消す.
 type DNSDomainUpdateOpts struct {
-	TTL         int64   `json:"ttl"`
-	Email       string  `json:"email"`
-	Description *string `json:"description,omitempty"`
+	TTL   int64  `json:"ttl"`
+	Email string `json:"email"`
 }
 
 // DNSRecord はドメインに設定した DNS レコード.
 // ID とドメイン ID は OpenAPI 仕様では "id"・"domain_id"、HTML ドキュメントでは "uuid"・"domain_uuid" で返るため、両方を読む.
 // weight・port は OpenAPI 仕様に無く HTML ドキュメントにだけある（SRV に要る）.
 type DNSRecord struct {
-	ID          string `json:"id"`
-	DomainID    string `json:"domain_id"`
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Data        string `json:"data"`
-	Priority    *int64 `json:"priority"`
-	Weight      *int64 `json:"weight"`
-	Port        *int64 `json:"port"`
-	TTL         *int64 `json:"ttl"`
-	Description string `json:"description"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID        string `json:"id"`
+	DomainID  string `json:"domain_id"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Data      string `json:"data"`
+	Priority  *int64 `json:"priority"`
+	Weight    *int64 `json:"weight"`
+	Port      *int64 `json:"port"`
+	TTL       *int64 `json:"ttl"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // UnmarshalJSON は "id"・"domain_id" が無ければ "uuid"・"domain_uuid" を読む.
@@ -106,17 +102,16 @@ func (r *DNSRecord) UnmarshalJSON(b []byte) error {
 
 // DNSRecordOpts はレコード作成・更新のリクエスト本文.
 // priority・weight・port・ttl は値があるときだけ送り、Null に挙げたものは値が無ければ null を送って消す.
-// Description は nil なら送らず、空文字なら説明を消す.
+// description は ConoHa の API が保存も返却もしない（2026-09-29 実測）ため持たない.
 type DNSRecordOpts struct {
-	Name        string   `json:"name"`
-	Type        string   `json:"type"`
-	Data        string   `json:"data"`
-	Priority    *int64   `json:"priority,omitempty"`
-	Weight      *int64   `json:"weight,omitempty"`
-	Port        *int64   `json:"port,omitempty"`
-	TTL         *int64   `json:"ttl,omitempty"`
-	Description *string  `json:"description,omitempty"`
-	Null        []string `json:"-"`
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	Data     string   `json:"data"`
+	Priority *int64   `json:"priority,omitempty"`
+	Weight   *int64   `json:"weight,omitempty"`
+	Port     *int64   `json:"port,omitempty"`
+	TTL      *int64   `json:"ttl,omitempty"`
+	Null     []string `json:"-"`
 }
 
 // MarshalJSON は Null に挙げたフィールドのうち値の無いものを null で送る.

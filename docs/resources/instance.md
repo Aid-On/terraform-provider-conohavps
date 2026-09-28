@@ -58,7 +58,7 @@ resource "conohavps_securitygroup" "test" {
 
 ### Required
 
-- `block_device` (Attributes List) The block device mapping for the instance. (see [below for nested schema](#nestedatt--block_device))
+- `block_device` (Attributes List) The block device mapping for the instance: the volumes given when the server is created. A volume attached later with `conohavps_volume_attachment` is not listed here, so it does not force the server to be recreated. (see [below for nested schema](#nestedatt--block_device))
 - `flavor_id` (String) The UUID of the flavor. The flavor ID can be obtained from the [ConoHa v3 API](https://doc.conoha.jp/reference/api-vps3/api-compute-vps3/compute-get_flavors_list-v3/?btn_id=reference-compute-get_flavors_detail-v3--sidebar_reference-compute-get_flavors_list-v3). Changing this value will resize the instance.
 - `instance_name_tag` (String) The name tag of the instance. Must be 1-255 characters long and contain only alphanumeric characters, hyphens (-), and underscores (_). Changing this value will update the instance metadata.
 

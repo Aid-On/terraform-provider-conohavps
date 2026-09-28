@@ -1,5 +1,12 @@
 ## Unreleased (Aid-On fork)
 
+BUG FIXES (found on 2026-09-29 by running the resources against the live ConoHa API):
+
+* `conohavps_instance` no longer replaces the server after a volume is attached with `conohavps_volume_attachment`: `block_device` keeps only the volumes given at creation instead of every attached volume
+* `conohavps_instance_autobackup` reads the metadata keys the API really sets (`daily_backup_status`, `daily_backup_retention`) instead of `backup_status`, so it is no longer removed from state and re-enabled on every plan, and `retention` is refreshed from ConoHa; the import ID is the server ID alone
+* `conohavps_dns_domain`, `conohavps_dns_record` and the `conohavps_dns_domain` data source drop `description`: ConoHa's DNS API neither stores nor returns it, which made every apply fail with "Provider produced inconsistent result after apply"
+* `conohavps_credential` says that ConoHa only lets an API user manage its own credentials (another user's, such as a `conohavps_subuser`, is refused with 403)
+
 DOCS:
 
 * `llms.txt` is the entry point for LLMs and agents: provider setup with a minimal HCL example, a link per resource and data source to its doc on GitHub, how flavor names are read, and ConoHa's tax-inclusive prices as read from the pricing pages and spec sheets on 2026-09-28 (hourly rates and monthly caps, prepaid by term, old memory plans, GPU, DB, Windows with SAL, options, QoS policies). ConoHa's own llms.txt lists the pre-March-2025 hourly prices under the new plan names. `go run ./tools/llmsprices` checks that every amount in the file still appears on ConoHa's pages and spec sheets
@@ -38,7 +45,7 @@ DRIFT DETECTION:
 * `conohavps_instance_autobackup` reads `backup_status` from server metadata; retention changes in place (retention itself cannot be read from the API)
 * `conohavps_subuser` checks the stored password by issuing a token as the sub-user, when the sub-user has the `gmo-identity` role
 * `conohavps_port` separates a removed QoS policy from a missing field and exposes `qos_network_policy_id`
-* `conohavps_dns_domain` reads the email address back, and domains and records gain `description`; record `ttl` and `type` change in place
+* `conohavps_dns_domain` reads the email address back; record `ttl` and `type` change in place
 * `conohavps_objectstorage_container` reads ACLs, web settings, versioning and `metadata` back from response headers
 
 ## 0.1.0 (Unreleased)
