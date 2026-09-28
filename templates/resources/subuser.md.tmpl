@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Identity"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/identity/subuser/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+Sub-users can be imported using its `id` . The password cannot be read back, so set `password` in the configuration; the next apply sets it on the sub-user.
+
+{{ codefile "shell" "examples/resources/identity/subuser/import.sh" }}
