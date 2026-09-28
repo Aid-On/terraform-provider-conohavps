@@ -39,14 +39,15 @@ type additionalIPResource struct {
 
 // 追加IPのリソースモデル.
 type additionalIPResourceModel struct {
-	ID               types.String `tfsdk:"id"`                 // ポート ID
-	Count            types.Int64  `tfsdk:"ip_count"`           // IP アドレスの個数（リクエスト）
-	SecurityGroupIDs types.Set    `tfsdk:"security_group_ids"` // セキュリティグループ ID（リクエスト）
-	QoSPolicyID      types.String `tfsdk:"qos_policy_id"`      // QoS ポリシー ID（更新のリクエスト）
-	IPAddresses      types.List   `tfsdk:"ip_addresses"`       // 割り当てられた IP アドレス
-	NetworkID        types.String `tfsdk:"network_id"`         // ネットワーク ID
-	Name             types.String `tfsdk:"name"`               // ポート名（ConoHa が付ける）
-	MACAddress       types.String `tfsdk:"mac_address"`        // MAC アドレス
+	ID                 types.String `tfsdk:"id"`                    // ポート ID
+	Count              types.Int64  `tfsdk:"ip_count"`              // IP アドレスの個数（リクエスト）
+	SecurityGroupIDs   types.Set    `tfsdk:"security_group_ids"`    // セキュリティグループ ID（リクエスト）
+	QoSPolicyID        types.String `tfsdk:"qos_policy_id"`         // QoS ポリシー ID（更新のリクエスト）
+	QoSNetworkPolicyID types.String `tfsdk:"qos_network_policy_id"` // ネットワークの QoS ポリシー ID
+	IPAddresses        types.List   `tfsdk:"ip_addresses"`          // 割り当てられた IP アドレス
+	NetworkID          types.String `tfsdk:"network_id"`            // ネットワーク ID
+	Name               types.String `tfsdk:"name"`                  // ポート名（ConoHa が付ける）
+	MACAddress         types.String `tfsdk:"mac_address"`           // MAC アドレス
 }
 
 func (r *additionalIPResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -56,7 +57,8 @@ func (r *additionalIPResource) Metadata(_ context.Context, req resource.Metadata
 func (r *additionalIPResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages additional IP addresses. ConoHa allocates the addresses on one port; " +
-			"attach it to a server with `conohavps_port_attachment`. The port cannot be deleted while it is attached to a server.",
+			"attach it to a server with `conohavps_port_attachment`. The port cannot be deleted while it is attached to a server. " +
+			"ConoHa does not let additional IP addresses be cancelled for 30 days after allocation, and the fee grows with the number of addresses.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "The ID of the port that holds the addresses.",
@@ -69,8 +71,9 @@ func (r *additionalIPResource) Schema(_ context.Context, _ resource.SchemaReques
 				Validators:          []validator.Int64{int64validator.Between(1, 16)},
 				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 			},
-			"security_group_ids": securityGroupIDsAttribute("port"),
-			"qos_policy_id":      qosPolicyIDAttribute("port"),
+			"security_group_ids":    securityGroupIDsAttribute("port"),
+			"qos_policy_id":         qosPolicyIDAttribute("port"),
+			"qos_network_policy_id": qosNetworkPolicyIDAttribute("port"),
 			"ip_addresses": schema.ListAttribute{
 				MarkdownDescription: "The allocated IP addresses.",
 				ElementType:         types.StringType,
@@ -225,7 +228,7 @@ func (r *additionalIPResource) Delete(ctx context.Context, req resource.DeleteRe
 		resp.Diagnostics.AddError(
 			"Failed to delete additional IP resource",
 			"An unexpected error occurred while attempting to delete additional IP resource. "+
-				"The port cannot be deleted while it is attached to a server.\n\n"+
+				"The port cannot be deleted while it is attached to a server, and ConoHa refuses to cancel additional IP addresses within 30 days of allocation.\n\n"+
 				"Error: "+err.Error(),
 		)
 		return
@@ -265,5 +268,6 @@ func setAdditionalIPModel(ctx context.Context, data *additionalIPResourceModel, 
 	}
 
 	data.SecurityGroupIDs, data.QoSPolicyID = securityAndQoSValues(ctx, port, data.QoSPolicyID, &diags)
+	data.QoSNetworkPolicyID = types.StringPointerValue(port.QoSNetworkPolicyID)
 	return diags
 }

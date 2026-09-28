@@ -2,12 +2,12 @@
 page_title: "conohavps_network Resource - terraform-provider-conohavps"
 subcategory: "Network"
 description: |-
-  Manages a local network (VLAN). The network takes no arguments: ConoHa names it. Up to 10 local networks can be created per ConoHa account. Add a conohavps_subnet to it before creating ports. A network cannot be deleted while subnets remain on it.
+  Manages a local network (VLAN). The network takes no arguments: ConoHa names it. Up to 10 local networks can be created per ConoHa account. Add a conohavps_subnet to it before creating ports. A network cannot be deleted while subnets or ports remain on it.
 ---
 
 # conohavps_network (Resource)
 
-Manages a local network (VLAN). The network takes no arguments: ConoHa names it. Up to 10 local networks can be created per ConoHa account. Add a `conohavps_subnet` to it before creating ports. A network cannot be deleted while subnets remain on it.
+Manages a local network (VLAN). The network takes no arguments: ConoHa names it. Up to 10 local networks can be created per ConoHa account. Add a `conohavps_subnet` to it before creating ports. A network cannot be deleted while subnets or ports remain on it.
 
 ## Example Usage
 

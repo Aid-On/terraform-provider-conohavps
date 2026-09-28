@@ -82,6 +82,7 @@ func TestPortUnit(t *testing.T) {
 					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("security_group_ids"), knownvalue.SetExact([]knownvalue.Check{knownvalue.StringExact("sg-1")})),
 					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("allowed_address_pairs"), knownvalue.SetSizeExact(0)),
 					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_policy_id"), knownvalue.Null()),
+					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_network_policy_id"), knownvalue.Null()),
 					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("name"), knownvalue.StringExact("local-gnct24510032")),
 					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("mac_address"), knownvalue.StringExact("fa:16:3e:00:00:01")),
 				},
@@ -192,9 +193,9 @@ func TestPortUnit_InvalidArguments(t *testing.T) {
 			{
 				Config: portUnitConfig(f, `
   network_id            = conohavps_network.a.id
-  allowed_address_pairs = [{ ip_address = "10.0.0.100" }]
+  allowed_address_pairs = [{ ip_address = "10.0.0.300" }]
 `),
-				ExpectError: regexp.MustCompile(`is not in CIDR notation`),
+				ExpectError: regexp.MustCompile(`is neither an IP address`),
 			},
 			{
 				Config: portUnitConfig(f, `
@@ -209,6 +210,99 @@ func TestPortUnit_InvalidArguments(t *testing.T) {
   security_group_ids = []
 `),
 				ExpectError: regexp.MustCompile(`at least 1`),
+			},
+		},
+	})
+}
+
+// 偽の API にあるポート（1つだけ作るテストで使う）を書き換える.
+func (f *fakeNetworking) editOnlyPort(edit func(p map[string]any)) func() {
+	return func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, p := range f.ports {
+			edit(p)
+		}
+	}
+}
+
+// QoS ポリシーは作成後の更新で付け、Terraform の外での変更はレスポンスから読んで差分にする.
+// VIP には CIDR 形式でない IP アドレスも書ける.
+func TestPortUnit_QoSPolicyDrift(t *testing.T) {
+	f := newFakeNetworking(t)
+	config := portUnitConfig(f, `
+  network_id            = conohavps_network.a.id
+  depends_on            = [conohavps_subnet.a]
+  allowed_address_pairs = [{ ip_address = "10.0.0.100" }]
+  qos_policy_id         = "qos-local"
+`)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: fakeapi.Factories,
+		CheckDestroy:             f.checkDestroyed,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_policy_id"), knownvalue.StringExact("qos-local")),
+					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("allowed_address_pairs"), knownvalue.SetExact([]knownvalue.Check{
+						knownvalue.ObjectExact(map[string]knownvalue.Check{"ip_address": knownvalue.StringExact("10.0.0.100")}),
+					})),
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// 作成の API は qos_policy_id を取らないため、作成の本文には入れない
+					portBody(f, "POST", "/networking/v2.0/ports", `{"port":{"network_id":"{net_a}","allowed_address_pairs":[{"ip_address":"10.0.0.100"}]}}`, portIDs),
+					f.expectBody("PUT", "/networking/v2.0/ports/port-.*", `{"port":{"qos_policy_id":"qos-local"}}`),
+				),
+			},
+			{
+				// Terraform の外で QoS ポリシーを変えると差分になり、設定の値に戻す
+				PreConfig: f.editOnlyPort(func(p map[string]any) {
+					p["qos_policy_id"] = "qos-other"
+					p["qos_network_policy_id"] = "qos-net"
+				}),
+				Config: config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("conohavps_port.test", plancheck.ResourceActionUpdate),
+					plancheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_policy_id"), knownvalue.StringExact("qos-local")),
+				}},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_policy_id"), knownvalue.StringExact("qos-local")),
+					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_network_policy_id"), knownvalue.StringExact("qos-net")),
+				},
+				Check: f.expectBody("PUT", "/networking/v2.0/ports/port-.*", `{"port":{"qos_policy_id":"qos-local"}}`),
+			},
+			{
+				// Terraform の外で QoS ポリシーを外しても（null）差分になる
+				PreConfig: f.editOnlyPort(func(p map[string]any) { p["qos_policy_id"] = nil }),
+				Config:    config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("conohavps_port.test", plancheck.ResourceActionUpdate),
+				}},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_policy_id"), knownvalue.StringExact("qos-local")),
+				},
+			},
+			{
+				// レスポンスに項目ごと無いときだけ、今の値を保つ
+				PreConfig:        f.editOnlyPort(func(p map[string]any) { delete(p, "qos_policy_id") }),
+				Config:           config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_policy_id"), knownvalue.StringExact("qos-local")),
+				},
+			},
+			{
+				// 設定に書いていなければ、Terraform の外での変更は差分にせず状態に取り込む
+				PreConfig: f.editOnlyPort(func(p map[string]any) { p["qos_policy_id"] = "qos-other" }),
+				Config: portUnitConfig(f, `
+  network_id            = conohavps_network.a.id
+  depends_on            = [conohavps_subnet.a]
+  allowed_address_pairs = [{ ip_address = "10.0.0.100" }]
+`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_port.test", tfjsonpath.New("qos_policy_id"), knownvalue.StringExact("qos-other")),
+				},
 			},
 		},
 	})

@@ -1,5 +1,6 @@
 // ローカルネットワーク用のポートのリソースを提供する.
 // ネットワークは作り直しになるが、IP アドレス・セキュリティグループ・VIP・QoS ポリシーはポート更新の API でその場で変える.
+// ポート名は ConoHa が付け、更新の API でも変えられない.
 
 package resource
 
@@ -47,6 +48,7 @@ type portResourceModel struct {
 	SecurityGroupIDs    types.Set    `tfsdk:"security_group_ids"`    // セキュリティグループ ID（リクエスト）
 	AllowedAddressPairs types.Set    `tfsdk:"allowed_address_pairs"` // VIP のネットワークアドレス（リクエスト）
 	QoSPolicyID         types.String `tfsdk:"qos_policy_id"`         // QoS ポリシー ID（更新のリクエスト）
+	QoSNetworkPolicyID  types.String `tfsdk:"qos_network_policy_id"` // ネットワークの QoS ポリシー ID
 	Name                types.String `tfsdk:"name"`                  // ポート名（ConoHa が付ける）
 	MACAddress          types.String `tfsdk:"mac_address"`           // MAC アドレス
 }
@@ -120,14 +122,15 @@ func (r *portResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"ip_address": schema.StringAttribute{
-							MarkdownDescription: "The network address in CIDR notation, such as `10.0.0.100/32`.",
+							MarkdownDescription: "The IP address, such as `10.0.0.100`, or the network address in CIDR notation, such as `10.0.0.96/28`.",
 							Required:            true,
-							Validators:          []validator.String{portCIDRValidator{}},
+							Validators:          []validator.String{portIPOrCIDRValidator{}},
 						},
 					},
 				},
 			},
-			"qos_policy_id": qosPolicyIDAttribute("port"),
+			"qos_policy_id":         qosPolicyIDAttribute("port"),
+			"qos_network_policy_id": qosNetworkPolicyIDAttribute("port"),
 			"name": schema.StringAttribute{
 				MarkdownDescription: "The name ConoHa gives the port.",
 				Computed:            true,
@@ -159,9 +162,20 @@ func securityGroupIDsAttribute(what string) schema.SetAttribute {
 func qosPolicyIDAttribute(what string) schema.StringAttribute {
 	return schema.StringAttribute{
 		MarkdownDescription: fmt.Sprintf("The ID of the QoS policy of the %s (see the `conohavps_qos_policy` data source). "+
-			"It is set with a port update right after creation. Changing this value will update the %s in place; "+
+			"The create API does not take it, so it is set with a port update right after creation. "+
+			"Changing this value will update the %s in place, and a policy changed outside Terraform shows as a difference; "+
 			"removing it from the configuration keeps the current policy.", what, what),
 		Optional:      true,
+		Computed:      true,
+		PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+	}
+}
+
+// ポートと追加IPで共通の、ネットワークの QoS ポリシー ID の属性.
+func qosNetworkPolicyIDAttribute(what string) schema.StringAttribute {
+	return schema.StringAttribute{
+		MarkdownDescription: fmt.Sprintf("The ID of the QoS policy of the network of the %s, which applies when the %s has no policy of its own. "+
+			"Null when the network has none.", what, what),
 		Computed:      true,
 		PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	}
@@ -350,11 +364,13 @@ func setPortModel(ctx context.Context, data *portResourceModel, port *service.Po
 	diags.Append(d...)
 
 	data.SecurityGroupIDs, data.QoSPolicyID = securityAndQoSValues(ctx, port, data.QoSPolicyID, &diags)
+	data.QoSNetworkPolicyID = types.StringPointerValue(port.QoSNetworkPolicyID)
 	return diags
 }
 
 // セキュリティグループと QoS ポリシーの値をレスポンスから作る.
-// QoS ポリシー ID がレスポンスに無い場合は、今の値を保つ.
+// QoS ポリシー ID はレスポンスの値（null なら null）を使い、Terraform の外での変更を差分として出す.
+// レスポンスに項目ごと無い場合（fields で絞られたなど）だけ、今の値を保つ.
 func securityAndQoSValues(ctx context.Context, port *service.Port, current types.String, diags *diag.Diagnostics) (types.Set, types.String) {
 	groups := port.SecurityGroups
 	if groups == nil {
@@ -364,9 +380,10 @@ func securityAndQoSValues(ctx context.Context, port *service.Port, current types
 	diags.Append(d...)
 
 	qos := current
-	if port.QoSPolicyID != nil {
-		qos = types.StringValue(*port.QoSPolicyID)
-	} else if qos.IsUnknown() {
+	switch {
+	case port.HasQoSPolicyID:
+		qos = types.StringPointerValue(port.QoSPolicyID)
+	case qos.IsUnknown():
 		qos = types.StringNull()
 	}
 	return sgs, qos
@@ -477,22 +494,26 @@ func (v portIPAddressValidator) ValidateString(_ context.Context, req validator.
 	}
 }
 
-// CIDR 形式のネットワークアドレスか確かめる.
-type portCIDRValidator struct{}
+// IP アドレスか CIDR 形式のネットワークアドレスか確かめる（OpenAPI 定義の「The allowed IP address or CIDR.」）.
+type portIPOrCIDRValidator struct{}
 
-func (v portCIDRValidator) Description(_ context.Context) string {
-	return "must be a network address in CIDR notation"
+func (v portIPOrCIDRValidator) Description(_ context.Context) string {
+	return "must be an IP address or a network address in CIDR notation"
 }
 
-func (v portCIDRValidator) MarkdownDescription(ctx context.Context) string {
+func (v portIPOrCIDRValidator) MarkdownDescription(ctx context.Context) string {
 	return v.Description(ctx)
 }
 
-func (v portCIDRValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+func (v portIPOrCIDRValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return
 	}
-	if _, err := netip.ParsePrefix(req.ConfigValue.ValueString()); err != nil {
-		resp.Diagnostics.AddAttributeError(req.Path, "Invalid CIDR", fmt.Sprintf("%q is not in CIDR notation (e.g. 10.0.0.100/32).", req.ConfigValue.ValueString()))
+	s := req.ConfigValue.ValueString()
+	if _, err := netip.ParseAddr(s); err == nil {
+		return
+	}
+	if _, err := netip.ParsePrefix(s); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid IP address or CIDR", fmt.Sprintf("%q is neither an IP address (e.g. 10.0.0.100) nor in CIDR notation (e.g. 10.0.0.96/28).", s))
 	}
 }

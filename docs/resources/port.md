@@ -65,7 +65,7 @@ resource "conohavps_port" "db" {
 
 - `allowed_address_pairs` (Attributes Set) The network addresses the port can also use, for use as a VIP. Changing this value will update the port in place. (see [below for nested schema](#nestedatt--allowed_address_pairs))
 - `fixed_ips` (Attributes List) The IP addresses of the port. Omit it to have one address assigned automatically. Changing this value will update the addresses in place; removing it from the configuration keeps the current addresses. (see [below for nested schema](#nestedatt--fixed_ips))
-- `qos_policy_id` (String) The ID of the QoS policy of the port (see the `conohavps_qos_policy` data source). It is set with a port update right after creation. Changing this value will update the port in place; removing it from the configuration keeps the current policy.
+- `qos_policy_id` (String) The ID of the QoS policy of the port (see the `conohavps_qos_policy` data source). The create API does not take it, so it is set with a port update right after creation. Changing this value will update the port in place, and a policy changed outside Terraform shows as a difference; removing it from the configuration keeps the current policy.
 - `security_group_ids` (Set of String) The IDs of the security groups of the port. When omitted, ConoHa sets the `default` security group. Changing this value will update the port in place; removing it from the configuration keeps the current security groups.
 
 ### Read-Only
@@ -73,13 +73,14 @@ resource "conohavps_port" "db" {
 - `id` (String) The ID of the port.
 - `mac_address` (String) The MAC address of the port.
 - `name` (String) The name ConoHa gives the port.
+- `qos_network_policy_id` (String) The ID of the QoS policy of the network of the port, which applies when the port has no policy of its own. Null when the network has none.
 
 <a id="nestedatt--allowed_address_pairs"></a>
 ### Nested Schema for `allowed_address_pairs`
 
 Required:
 
-- `ip_address` (String) The network address in CIDR notation, such as `10.0.0.100/32`.
+- `ip_address` (String) The IP address, such as `10.0.0.100`, or the network address in CIDR notation, such as `10.0.0.96/28`.
 
 
 <a id="nestedatt--fixed_ips"></a>

@@ -1,5 +1,6 @@
 // サーバーへのポートのアタッチのリソースを提供する.
 // ローカルネットワークのポートや追加IPのポートをサーバーに付け、削除でデタッチする.
+// アタッチは同期（200）で終わるため待たず、デタッチは非同期（202）のため一覧から消えるまで待つ.
 
 package resource
 
@@ -56,7 +57,8 @@ func (r *portAttachmentResource) Metadata(_ context.Context, req resource.Metada
 func (r *portAttachmentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Attaches a port (a `conohavps_port` on a local network or a `conohavps_additional_ip`) to a server. " +
-			"Destroying it detaches the port and waits until the server no longer lists it.",
+			"The server must be running or stopped (`ACTIVE` or `SHUTOFF`), not in the middle of another operation. " +
+			"Attaching completes in the API call; destroying it detaches the port and waits until the server no longer lists it.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "The ID of the attachment, in the form `<server_id>/<port_id>`.",

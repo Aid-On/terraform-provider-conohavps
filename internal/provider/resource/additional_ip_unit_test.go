@@ -41,6 +41,8 @@ func TestAdditionalIPUnit(t *testing.T) {
 					statecheck.ExpectKnownValue("conohavps_additional_ip.test", tfjsonpath.New("security_group_ids"), knownvalue.SetExact([]knownvalue.Check{knownvalue.StringExact("sg-default")})),
 					statecheck.ExpectKnownValue("conohavps_additional_ip.test", tfjsonpath.New("name"), knownvalue.StringExact("add-i_100000-o_100000-p_0a")),
 					statecheck.ExpectKnownValue("conohavps_additional_ip.test", tfjsonpath.New("network_id"), knownvalue.StringExact("fb00d078-8ae1-4145-b3b9-82dfb7596227")),
+					statecheck.ExpectKnownValue("conohavps_additional_ip.test", tfjsonpath.New("qos_policy_id"), knownvalue.Null()),
+					statecheck.ExpectKnownValue("conohavps_additional_ip.test", tfjsonpath.New("qos_network_policy_id"), knownvalue.Null()),
 				},
 				Check: f.expectBody("POST", "/networking/v2.0/allocateips", `{"allocateip":{"count":2}}`),
 			},
@@ -59,6 +61,26 @@ func TestAdditionalIPUnit(t *testing.T) {
 					statecheck.ExpectKnownValue("conohavps_additional_ip.test", tfjsonpath.New("ip_addresses"), knownvalue.ListSizeExact(2)),
 				},
 				Check: f.expectBody("PUT", "/networking/v2.0/ports/port-.*", `{"port":{"security_groups":["sg-1"],"qos_policy_id":"qos-300"}}`),
+			},
+			{
+				// Terraform の外で QoS ポリシーを変えると差分になり、QoS ポリシーだけを送って戻す
+				PreConfig: f.editOnlyPort(func(p map[string]any) {
+					p["qos_policy_id"] = "qos-100"
+					p["qos_network_policy_id"] = "qos-net"
+				}),
+				Config: additionalIPUnitConfig(f, `
+  ip_count           = 2
+  security_group_ids = ["sg-1"]
+  qos_policy_id      = "qos-300"
+`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("conohavps_additional_ip.test", plancheck.ResourceActionUpdate),
+				}},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("conohavps_additional_ip.test", tfjsonpath.New("qos_policy_id"), knownvalue.StringExact("qos-300")),
+					statecheck.ExpectKnownValue("conohavps_additional_ip.test", tfjsonpath.New("qos_network_policy_id"), knownvalue.StringExact("qos-net")),
+				},
+				Check: f.expectBody("PUT", "/networking/v2.0/ports/port-.*", `{"port":{"qos_policy_id":"qos-300"}}`),
 			},
 			{
 				ResourceName:      "conohavps_additional_ip.test",
