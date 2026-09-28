@@ -1,0 +1,22 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Image"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile "examples/resources/image/image_quota/main.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Import
+
+The image quota can be imported using the tenant ID of the provider.
+
+{{ codefile "shell" "examples/resources/image/image_quota/import.sh" }}
