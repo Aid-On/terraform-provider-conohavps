@@ -38,6 +38,7 @@ resource "conohavps_volume_snapshot" "example" {
 - `id` (String) Snapshot ID.
 - `size` (Number) Snapshot size in GB.
 - `status` (String) Snapshot status.
+- `updated_at` (String) The date and time the snapshot was last updated, in RFC 3339 format. Null until the API reports it.
 
 ## Import
 

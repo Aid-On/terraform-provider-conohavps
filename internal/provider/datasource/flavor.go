@@ -25,11 +25,12 @@ type flavorDataSource struct {
 }
 
 type flavorDataSourceModel struct {
-	Name  types.String `tfsdk:"name"`  // フレーバー名
-	ID    types.String `tfsdk:"id"`    // フレーバー ID
-	VCPUs types.Int64  `tfsdk:"vcpus"` // CPU コア数
-	RAM   types.Int64  `tfsdk:"ram"`   // メモリ（MB）
-	Disk  types.Int64  `tfsdk:"disk"`  // ディスク（GB）
+	Name       types.String `tfsdk:"name"`        // フレーバー名
+	ID         types.String `tfsdk:"id"`          // フレーバー ID
+	VCPUs      types.Int64  `tfsdk:"vcpus"`       // CPU コア数
+	RAM        types.Int64  `tfsdk:"ram"`         // メモリ（MB）
+	Disk       types.Int64  `tfsdk:"disk"`        // ディスク（GB）
+	ExtraSpecs types.Map    `tfsdk:"extra_specs"` // 追加仕様（specialized_kusanagi など）
 }
 
 func (d *flavorDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -58,6 +59,11 @@ func (d *flavorDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 			},
 			"disk": schema.Int64Attribute{
 				MarkdownDescription: "The disk in GB the flavor defines.",
+				Computed:            true,
+			},
+			"extra_specs": schema.MapAttribute{
+				MarkdownDescription: "The extra specs of the flavor, such as `specialized_kusanagi`. Empty when the flavor has none.",
+				ElementType:         types.StringType,
 				Computed:            true,
 			},
 		},
@@ -92,6 +98,16 @@ func (d *flavorDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	data.VCPUs = types.Int64Value(int64(flavor.VCPUs))
 	data.RAM = types.Int64Value(int64(flavor.RAM))
 	data.Disk = types.Int64Value(int64(flavor.Disk))
+	specs := flavor.ExtraSpecs
+	if specs == nil {
+		specs = map[string]string{}
+	}
+	extraSpecs, diags := types.MapValueFrom(ctx, types.StringType, specs)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	data.ExtraSpecs = extraSpecs
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

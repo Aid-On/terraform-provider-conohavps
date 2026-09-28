@@ -154,6 +154,7 @@ resource "conohavps_volume_snapshot" "test" {
 					statecheck.ExpectKnownValue(addr, tfjsonpath.New("status"), knownvalue.StringExact("available")),
 					statecheck.ExpectKnownValue(addr, tfjsonpath.New("size"), knownvalue.Int64Exact(100)),
 					statecheck.ExpectKnownValue(addr, tfjsonpath.New("created_at"), knownvalue.StringExact("2018-11-28T06:25:15Z")),
+					statecheck.ExpectKnownValue(addr, tfjsonpath.New("updated_at"), knownvalue.StringExact("2018-11-28T06:26:10Z")),
 					statecheck.ExpectKnownValue(addr, tfjsonpath.New("volume_id"), knownvalue.StringExact("vol-1")),
 				},
 				Check: f.checkLastBody(map[string]any{"volume_id": "vol-1", "name": "the-snapshot-name", "description": "test snapshot"}),

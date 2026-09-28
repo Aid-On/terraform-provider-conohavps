@@ -17,6 +17,6 @@ description: |-
 
 ## Import
 
-Auto-backup can be imported using the server ID. The API cannot read back the retention, so it is taken as 14 days unless given as `<instance_id>/<retention>` .
+Auto-backup can be imported using the server ID. No API returns the retention, so it is taken as 14 days unless given as `<instance_id>/<retention>` .
 
 {{ codefile "shell" "examples/resources/volume/instance_autobackup/import.sh" }}

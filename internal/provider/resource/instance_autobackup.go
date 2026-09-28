@@ -1,7 +1,7 @@
 // サーバーの自動バックアップのリソースを提供する.
-// リソースが存在することは「そのサーバーにアタッチされているボリュームの自動バックアップが有効である」ことを表し、
-// 削除すると自動バックアップを無効にする.
-// 有効・無効の状態と保存期間を読み戻す API は無いため、Read はサーバーの存在だけを確かめ、それ以外は State を保つ.
+// リソースが存在することは「そのサーバーの自動バックアップを申し込んでいる」ことを表し、
+// 削除すると自動バックアップを解約する（取得済みのバックアップは残る）. 保存期間は更新 API でその場で変える.
+// 保存期間を読み戻す API は無いため、Read はサーバーのメタデータで申し込みの有無だけを確かめ、保存期間は State を保つ.
 
 package resource
 
@@ -18,7 +18,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -33,7 +32,7 @@ var (
 	_ resource.ResourceWithImportState = &instanceAutoBackupResource{}
 )
 
-// 自動バックアップの既定値（ドキュメントの既定値）.
+// 自動バックアップの既定値（API 仕様の既定値）.
 const (
 	autoBackupDefaultSchedule  = "daily"
 	autoBackupDefaultRetention = 14
@@ -60,12 +59,14 @@ func (r *instanceAutoBackupResource) Metadata(_ context.Context, req resource.Me
 
 func (r *instanceAutoBackupResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Enables auto-backup of the volumes attached to a server. " +
+		MarkdownDescription: "Enables daily auto-backup of the volumes attached to a server. " +
 			"The boot storage volume and, when attached, the additional storage volume are backed up. " +
-			"Destroying this resource disables auto-backup of the server.\n\n" +
-			"Whether auto-backup is enabled is read from the server's metadata (`backup_status`), so disabling it outside Terraform " +
-			"shows as a change that enables it again. The API does not return the retention, so a retention changed outside Terraform is not detected. " +
-			"The API has no update operation, so changing `schedule` or `retention` disables auto-backup and enables it again.",
+			"Changing `retention` updates it in place. " +
+			"Destroying this resource cancels auto-backup of the server (both daily and weekly); backups already taken are not deleted, " +
+			"and `conohavps_backups` still lists them.\n\n" +
+			"Whether auto-backup is enabled is read from the server's metadata (`backup_status`), so cancelling it outside Terraform " +
+			"shows as a change that enables it again. No API returns the retention, so `retention` is kept as Terraform last set it, " +
+			"and a retention changed outside Terraform is not detected.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "The ID of the server (same as `instance_id`).",
@@ -82,27 +83,25 @@ func (r *instanceAutoBackupResource) Schema(_ context.Context, _ resource.Schema
 				},
 			},
 			"schedule": schema.StringAttribute{
-				MarkdownDescription: "The backup schedule. Allowed value: `daily`. Defaults to `daily`. Changing this value will force the resource to be recreated.",
-				Optional:            true,
-				Computed:            true,
-				Default:             stringdefault.StaticString(autoBackupDefaultSchedule),
+				MarkdownDescription: "The backup schedule. Only `daily` is allowed, and it is the default. " +
+					"The API has deprecated this parameter and the provider does not send it; omit it.",
+				DeprecationMessage: "The ConoHa API has deprecated the backup schedule and only daily backups can be applied for. " +
+					"Remove `schedule` from the configuration; it is always `daily`.",
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString(autoBackupDefaultSchedule),
 				Validators: []validator.String{
 					&oneOfStringValidator{values: []string{"daily"}},
 				},
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"retention": schema.Int64Attribute{
-				MarkdownDescription: "The retention period of backups in days, from 14 to 30. Defaults to 14. Changing this value will force the resource to be recreated.",
-				Optional:            true,
-				Computed:            true,
-				Default:             int64default.StaticInt64(autoBackupDefaultRetention),
+				MarkdownDescription: "The number of days daily backups are kept, from 14 to 30. Defaults to 14. " +
+					"Changing this value updates it in place. No API returns this value, so it is not refreshed from ConoHa.",
+				Optional: true,
+				Computed: true,
+				Default:  int64default.StaticInt64(autoBackupDefaultRetention),
 				Validators: []validator.Int64{
 					int64validator.Between(14, 30),
-				},
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
 				},
 			},
 		},
@@ -135,13 +134,11 @@ func (r *instanceAutoBackupResource) Create(ctx context.Context, req resource.Cr
 
 	tflog.Debug(ctx, "Starting auto-backup enabling request.", map[string]any{
 		"instance_id": plan.InstanceID.ValueString(),
-		"schedule":    plan.Schedule.ValueString(),
 		"retention":   plan.Retention.ValueInt64(),
 	})
 
 	backup, err := r.client.EnableAutoBackup(ctx, service.EnableAutoBackupOpts{
 		InstanceID: plan.InstanceID.ValueString(),
-		Schedule:   plan.Schedule.ValueString(),
 		Retention:  int(plan.Retention.ValueInt64()),
 	})
 	if err != nil {
@@ -202,18 +199,49 @@ func (r *instanceAutoBackupResource) Read(ctx context.Context, req resource.Read
 }
 
 // サーバーのメタデータから、自動バックアップが有効かを判定する.
-// 有効なサーバーには backup_status（"active" など）が載る. 値の一覧はドキュメントに無いため、
-// 空でなければ有効とみなす.
+// 有効なサーバーには backup_status（"active" など）が載る. このキーと値の一覧は API 仕様に無く、
+// サーバー詳細取得のドキュメントの応答例にだけ載るため、空でなければ有効とみなす.
 func autoBackupEnabled(metadata map[string]string) bool {
 	return metadata["backup_status"] != ""
 }
 
-func (r *instanceAutoBackupResource) Update(_ context.Context, _ resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// 更新 API は無く、すべての属性が再作成を伴うため、更新は発生しない
-	resp.Diagnostics.AddError(
-		"An unexpected operation occurred",
-		"Updating instance auto-backup resource is not supported. If changes are needed, delete and recreate the resource.",
-	)
+func (r *instanceAutoBackupResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan, state instanceAutoBackupResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// 変えられるのは保存期間だけ（instance_id は再作成、schedule は daily のみ）
+	if !plan.Retention.Equal(state.Retention) {
+		tflog.Debug(ctx, "Starting auto-backup retention update request.", map[string]any{
+			"instance_id": plan.InstanceID.ValueString(),
+			"retention":   plan.Retention.ValueInt64(),
+		})
+
+		retention, err := r.client.UpdateAutoBackupRetention(ctx, plan.InstanceID.ValueString(), int(plan.Retention.ValueInt64()))
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Failed to update instance auto-backup resource",
+				"An unexpected error occurred while attempting to update the retention of auto-backup. Daily auto-backup must be applied for.\n\n"+
+					"Error: "+err.Error(),
+			)
+			return
+		}
+		// 応答に保存期間が載っていればそれを正とする
+		if retention != 0 {
+			plan.Retention = types.Int64Value(int64(retention))
+		}
+
+		tflog.Debug(ctx, "Auto-backup retention update request completed.", map[string]any{
+			"instance_id": plan.InstanceID.ValueString(),
+			"retention":   plan.Retention.ValueInt64(),
+		})
+	}
+
+	plan.ID = plan.InstanceID
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
 func (r *instanceAutoBackupResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -223,6 +251,7 @@ func (r *instanceAutoBackupResource) Delete(ctx context.Context, req resource.De
 		return
 	}
 
+	// 解約しても取得済みのバックアップは削除されない
 	tflog.Debug(ctx, "Starting auto-backup disabling request.", map[string]any{
 		"instance_id": state.InstanceID.ValueString(),
 	})

@@ -34,6 +34,12 @@ resource "conohavps_volume" "boot" {
 
 ### Read-Only
 
+- `architecture` (String) The CPU architecture of the image, such as `x86_64`. Empty when the image does not set it.
 - `id` (String) The UUID of the image.
 - `min_disk` (Number) The smallest disk in GB the image boots from.
+- `min_ram` (Number) The smallest memory in MB the image boots with.
+- `os_type` (String) The type of the operating system, such as `linux` or `windows`. Empty when the image does not set it.
+- `os_version` (String) The version of the operating system. Empty when the image does not set it.
+- `size` (Number) The size of the image in bytes.
 - `status` (String) The status of the image.
+- `visibility` (String) The visibility of the image, such as `public` or `private`.

@@ -6,6 +6,7 @@ package datasource_test
 
 import (
 	"net/http"
+	"net/url"
 	"regexp"
 	"testing"
 
@@ -18,31 +19,70 @@ import (
 
 func withFlavorsAndImages(t *testing.T) *fakeapi.Server {
 	s := fakeapi.New(t)
+	// API 仕様（FlavorResBody）の形. swap は空文字列で返る
+	flavor := func(id, name string, vcpus, ram int, extra map[string]any) map[string]any {
+		f := map[string]any{
+			"id": id, "name": name, "vcpus": vcpus, "ram": ram, "disk": 0, "swap": "",
+			"OS-FLV-EXT-DATA:ephemeral": 0, "OS-FLV-DISABLED:disabled": false, "os-flavor-access:is_public": true,
+			"rxtx_factor": 1.0, "links": []any{},
+		}
+		if extra != nil {
+			f["extra_specs"] = extra
+		}
+		return f
+	}
 	s.Mux.HandleFunc("GET /compute/v2.1/flavors/detail", func(w http.ResponseWriter, r *http.Request) {
 		if !fakeapi.Authorized(w, r) {
 			return
 		}
+		// 詳細一覧取得にクエリパラメータは無い
+		if r.URL.RawQuery != "" {
+			fakeapi.WriteJSON(w, http.StatusBadRequest, map[string]any{"badRequest": map[string]any{"message": "unexpected query " + r.URL.RawQuery}})
+			return
+		}
 		fakeapi.WriteJSON(w, http.StatusOK, map[string]any{"flavors": []map[string]any{
-			{"id": "uuid-c4m4", "name": "g2l-t-c4m4", "vcpus": 4, "ram": 4096, "disk": 0},
-			{"id": "uuid-c6m12", "name": "g2l-t-c6m12", "vcpus": 6, "ram": 12288, "disk": 0},
-			{"id": "uuid-p-c4m4", "name": "g2l-p-c4m4", "vcpus": 4, "ram": 4096, "disk": 0},
+			flavor("uuid-c4m4", "g2l-t-c4m4", 4, 4096, nil),
+			flavor("uuid-c6m12", "g2l-t-c6m12", 6, 12288, map[string]any{}),
+			flavor("uuid-p-c4m4", "g2l-p-c4m4", 4, 4096, nil),
+			flavor("uuid-kusanagi", "g2l-t-kusanagi-c4m4", 4, 4096, map[string]any{"specialized_kusanagi": "true"}),
 		}})
 	})
 	s.Mux.HandleFunc("GET /image-service/v2/images", func(w http.ResponseWriter, r *http.Request) {
 		if !fakeapi.Authorized(w, r) {
 			return
 		}
-		all := []map[string]any{
-			{"id": "img-ubuntu", "name": "vmi-ubuntu-24.04-amd64", "status": "active", "min_disk": 30},
-			{"id": "img-old", "name": "vmi-ubuntu-24.04-amd64", "status": "deactivated", "min_disk": 30},
+		// API 仕様（ImagesBody）の形. 日時はタイムゾーンを含まず、virtual_size は null で返る
+		image := func(id, status string) map[string]any {
+			return map[string]any{
+				"id": id, "name": "vmi-ubuntu-24.04-amd64", "status": status, "min_disk": 30, "min_ram": 1024,
+				"size": 13167616, "visibility": "public", "os_type": "linux", "os_version": "24.04", "architecture": "x86_64",
+				"tags": []any{}, "container_format": "bare", "disk_format": "qcow2", "protected": false, "os_hidden": false,
+				"created_at": "2018-11-28T06:25:15.288987", "updated_at": "2018-11-28T06:25:15.288987", "virtual_size": nil,
+				"self": "/v2/images/" + id, "file": "/v2/images/" + id + "/file", "schema": "/v2/schemas/image",
+			}
 		}
+		// 1件ずつのページに分け、next のリンク（/v2/images?marker=...）で次のページを示す
+		all := []map[string]any{image("img-old", "deactivated"), image("img-ubuntu", "active")}
 		var images []map[string]any
 		for _, i := range all {
 			if name := r.URL.Query().Get("name"); name == "" || i["name"] == name {
 				images = append(images, i)
 			}
 		}
-		fakeapi.WriteJSON(w, http.StatusOK, map[string]any{"images": images})
+		start := 0
+		if marker := r.URL.Query().Get("marker"); marker != "" {
+			for n, i := range images {
+				if i["id"] == marker {
+					start = n + 1
+				}
+			}
+		}
+		page := map[string]any{"images": images[start:min(start+1, len(images))], "schema": "/v2/schemas/images", "first": "/v2/images"}
+		if start+1 < len(images) {
+			q := url.Values{"marker": {images[start]["id"].(string)}, "name": {r.URL.Query().Get("name")}}
+			page["next"] = "/v2/images?" + q.Encode()
+		}
+		fakeapi.WriteJSON(w, http.StatusOK, page)
 	})
 	return s
 }
@@ -57,6 +97,10 @@ data "conohavps_flavor" "main" {
   name = "g2l-t-c6m12"
 }
 
+data "conohavps_flavor" "kusanagi" {
+  name = "g2l-t-kusanagi-c4m4"
+}
+
 data "conohavps_image" "ubuntu" {
   name = "vmi-ubuntu-24.04-amd64"
 }
@@ -65,9 +109,19 @@ data "conohavps_image" "ubuntu" {
 				statecheck.ExpectKnownValue("data.conohavps_flavor.main", tfjsonpath.New("id"), knownvalue.StringExact("uuid-c6m12")),
 				statecheck.ExpectKnownValue("data.conohavps_flavor.main", tfjsonpath.New("vcpus"), knownvalue.Int64Exact(6)),
 				statecheck.ExpectKnownValue("data.conohavps_flavor.main", tfjsonpath.New("ram"), knownvalue.Int64Exact(12288)),
-				// 使える状態のものだけを選ぶ（同名の停止済みイメージは選ばない）
+				statecheck.ExpectKnownValue("data.conohavps_flavor.main", tfjsonpath.New("extra_specs"), knownvalue.MapExact(map[string]knownvalue.Check{})),
+				statecheck.ExpectKnownValue("data.conohavps_flavor.kusanagi", tfjsonpath.New("extra_specs"), knownvalue.MapExact(map[string]knownvalue.Check{
+					"specialized_kusanagi": knownvalue.StringExact("true"),
+				})),
+				// 使える状態のものだけを選ぶ（同名の停止済みイメージは選ばない）. 2ページ目にあっても next をたどって見つける
 				statecheck.ExpectKnownValue("data.conohavps_image.ubuntu", tfjsonpath.New("id"), knownvalue.StringExact("img-ubuntu")),
 				statecheck.ExpectKnownValue("data.conohavps_image.ubuntu", tfjsonpath.New("min_disk"), knownvalue.Int64Exact(30)),
+				statecheck.ExpectKnownValue("data.conohavps_image.ubuntu", tfjsonpath.New("min_ram"), knownvalue.Int64Exact(1024)),
+				statecheck.ExpectKnownValue("data.conohavps_image.ubuntu", tfjsonpath.New("size"), knownvalue.Int64Exact(13167616)),
+				statecheck.ExpectKnownValue("data.conohavps_image.ubuntu", tfjsonpath.New("visibility"), knownvalue.StringExact("public")),
+				statecheck.ExpectKnownValue("data.conohavps_image.ubuntu", tfjsonpath.New("os_type"), knownvalue.StringExact("linux")),
+				statecheck.ExpectKnownValue("data.conohavps_image.ubuntu", tfjsonpath.New("os_version"), knownvalue.StringExact("24.04")),
+				statecheck.ExpectKnownValue("data.conohavps_image.ubuntu", tfjsonpath.New("architecture"), knownvalue.StringExact("x86_64")),
 			},
 		}},
 	})
