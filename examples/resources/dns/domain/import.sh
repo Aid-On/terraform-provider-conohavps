@@ -1,0 +1,1 @@
+$ terraform import conohavps_dns_domain.example {{domain_id}}
