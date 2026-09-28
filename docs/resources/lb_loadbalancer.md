@@ -26,6 +26,7 @@ resource "conohavps_lb_loadbalancer" "lb_1" {
 
 ### Read-Only
 
+- `admin_state_up` (Boolean) Whether the load balancer is administratively up. The API does not accept this value on create or update, so it is read only.
 - `id` (String) The ID of the load balancer.
 - `operating_status` (String) The operating status of the load balancer (for example `ONLINE` or `OFFLINE`).
 - `vip_address` (String) The virtual IP address of the load balancer.

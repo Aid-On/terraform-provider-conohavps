@@ -43,6 +43,7 @@ resource "conohavps_lb_pool" "pool_1" {
 
 ### Read-Only
 
+- `admin_state_up` (Boolean) Whether the pool is administratively up. The API does not accept this value on create or update, so it is read only.
 - `id` (String) The ID of the pool.
 - `loadbalancer_id` (String) The ID of the load balancer that the pool belongs to.
 - `operating_status` (String) The operating status of the pool.

@@ -40,6 +40,7 @@ type lbLoadBalancerResourceModel struct {
 	VipPortID       types.String `tfsdk:"vip_port_id"`
 	VipSubnetID     types.String `tfsdk:"vip_subnet_id"`
 	VipNetworkID    types.String `tfsdk:"vip_network_id"`
+	AdminStateUp    types.Bool   `tfsdk:"admin_state_up"`
 	OperatingStatus types.String `tfsdk:"operating_status"`
 }
 
@@ -64,7 +65,7 @@ func (r *lbLoadBalancerResource) Schema(_ context.Context, _ resource.SchemaRequ
 		Attributes: map[string]schema.Attribute{
 			"id": computedVIP("The ID of the load balancer."),
 			"name": schema.StringAttribute{
-				// ドキュメントに長さの制約は無いが、空の名前は送らない. 上限は OpenStack の 255 文字に揃える
+				// 仕様は名前を必須とするが長さの制約は書いていない. 空の名前は送らず、上限は OpenStack の 255 文字に揃える
 				MarkdownDescription: "The name of the load balancer, shown as the name tag in the control panel. " +
 					"The name length needs to be between 1 and 255. Changing this value updates the name in place.",
 				Required: true,
@@ -76,6 +77,7 @@ func (r *lbLoadBalancerResource) Schema(_ context.Context, _ resource.SchemaRequ
 			"vip_port_id":    computedVIP("The ID of the port of the virtual IP."),
 			"vip_subnet_id":  computedVIP("The ID of the subnet of the virtual IP."),
 			"vip_network_id": computedVIP("The ID of the network of the virtual IP."),
+			"admin_state_up": lbReadOnlyAdminStateUp("load balancer"),
 			"operating_status": schema.StringAttribute{
 				MarkdownDescription: "The operating status of the load balancer (for example `ONLINE` or `OFFLINE`).",
 				Computed:            true,
@@ -198,5 +200,6 @@ func (m *lbLoadBalancerResourceModel) fill(lb *service.LoadBalancer) {
 	m.VipPortID = types.StringValue(lb.VipPortID)
 	m.VipSubnetID = types.StringValue(lb.VipSubnetID)
 	m.VipNetworkID = types.StringValue(lb.VipNetworkID)
+	m.AdminStateUp = types.BoolValue(lb.AdminStateUp)
 	m.OperatingStatus = types.StringValue(lb.OperatingStatus)
 }

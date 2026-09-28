@@ -13,7 +13,7 @@ description: |-
 
 {{ tffile "examples/resources/loadbalancer/health_monitor/main.tf" }}
 
-An `HTTP` or `HTTPS` health monitor also needs `url_path` and `expected_codes`:
+An `HTTP` or `HTTPS` health monitor can also set `url_path` and `expected_codes`. When they are omitted, the API's defaults are used and read back into the state:
 
 ```terraform
 resource "conohavps_lb_health_monitor" "http" {

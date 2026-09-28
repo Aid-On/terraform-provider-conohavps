@@ -1,8 +1,8 @@
 // ロードバランサー（LBaaS）の偽の API を提供する.
-// オブジェクトをメモリに持ち、ドキュメントの応答の形で返す. provisioning_status は、変更の直後の
-// 1 回の読み取りだけ PENDING_* を返してから ACTIVE（削除なら 404）に移り、その間は親のロードバランサーも
-// PENDING_UPDATE にして、配下の変更を 409 で拒否する. リクエストの本文はドキュメントの項目と突き合わせ、
-// 足りない項目や余計な項目があれば 400 を返す.
+// オブジェクトをメモリに持ち、GMO の OpenAPI 仕様（conoha_vps_openapi）の応答スキーマの形で返す.
+// provisioning_status は、変更の直後の 1 回の読み取りだけ PENDING_* を返してから ACTIVE（削除なら 404）に移り、
+// その間は親のロードバランサーも PENDING_UPDATE にして、配下の変更を 409 で拒否する.
+// リクエストの本文は仕様の要求スキーマと突き合わせ、足りない項目・余計な項目・型や値の誤りがあれば 400 を返す.
 
 package resource_test
 
@@ -110,20 +110,95 @@ func fault(status int, format string, args ...any) (int, any) {
 	return status, map[string]any{"faultcode": http.StatusText(status), "faultstring": fmt.Sprintf(format, args...)}
 }
 
-// 本文が {wrapper: {...}} の形で、required をすべて含み、required と optional 以外を含まないことを確かめる.
-func bodyOf(body map[string]any, wrapper string, required []string, optional ...string) (map[string]any, error) {
+// specField は仕様の要求スキーマの 1 項目. typ は JSON の型（string・number・boolean）.
+// enum は仕様の説明文に挙がっている値（空なら制限しない）.
+type specField struct {
+	typ      string
+	required bool
+	enum     []string
+}
+
+type specSchema map[string]specField
+
+var (
+	lbProtocols  = []string{"TCP", "UDP"}
+	lbAlgorithms = []string{"LEAST_CONNECTIONS", "ROUND_ROBIN"}
+	// 仕様の「ヘルスモニター作成」の説明に挙がっている type
+	lbMonitorTypes = []string{"TCP", "HTTP", "HTTPS", "PING", "UDP-CONNECT"}
+)
+
+// 仕様の要求スキーマ（CreateLoadBalancerReq など）.
+var (
+	createLoadBalancerReq = specSchema{"name": {typ: "string", required: true}}
+	updateLoadBalancerReq = specSchema{"name": {typ: "string"}}
+	createListenerReq     = specSchema{
+		"protocol":        {typ: "string", required: true, enum: lbProtocols},
+		"protocol_port":   {typ: "number", required: true},
+		"loadbalancer_id": {typ: "string", required: true},
+		"name":            {typ: "string", required: true},
+	}
+	updateListenerReq = specSchema{"name": {typ: "string"}}
+	createPoolReq     = specSchema{
+		"lb_algorithm": {typ: "string", required: true, enum: lbAlgorithms},
+		"protocol":     {typ: "string", required: true, enum: lbProtocols},
+		"listener_id":  {typ: "string", required: true},
+		"name":         {typ: "string", required: true},
+	}
+	updatePoolReq = specSchema{
+		"lb_algorithm": {typ: "string", enum: lbAlgorithms},
+		"name":         {typ: "string"},
+	}
+	createMemberReq = specSchema{
+		"name":          {typ: "string", required: true},
+		"address":       {typ: "string", required: true},
+		"protocol_port": {typ: "number", required: true},
+	}
+	// 仕様は admin_state_up を string と書くが、例・説明・応答はいずれも真偽値なので真偽値として確かめる
+	updateMemberReq        = specSchema{"admin_state_up": {typ: "boolean", required: true}}
+	createHealthmonitorReq = specSchema{
+		"name":           {typ: "string", required: true},
+		"pool_id":        {typ: "string", required: true},
+		"delay":          {typ: "number", required: true},
+		"max_retries":    {typ: "number", required: true},
+		"timeout":        {typ: "number", required: true},
+		"type":           {typ: "string", required: true, enum: lbMonitorTypes},
+		"url_path":       {typ: "string"},
+		"expected_codes": {typ: "string"},
+	}
+	updateHealthmonitorReq = specSchema{"name": {typ: "string"}}
+)
+
+// 本文が {wrapper: {...}} の形で、schema の必須項目をすべて含み、schema に無い項目を含まず、
+// 各項目の型と値が schema に合うことを確かめる.
+func bodyOf(body map[string]any, wrapper string, schema specSchema) (map[string]any, error) {
 	inner, ok := body[wrapper].(map[string]any)
 	if !ok || len(body) != 1 {
 		return nil, fmt.Errorf("body must be {%q: {...}}, got %v", wrapper, body)
 	}
-	for _, k := range required {
-		if _, ok := inner[k]; !ok {
+	for k, f := range schema {
+		if _, ok := inner[k]; f.required && !ok {
 			return nil, fmt.Errorf("%s.%s is required", wrapper, k)
 		}
 	}
-	for k := range inner {
-		if !slices.Contains(required, k) && !slices.Contains(optional, k) {
-			return nil, fmt.Errorf("%s.%s is not a documented parameter", wrapper, k)
+	for k, v := range inner {
+		f, ok := schema[k]
+		if !ok {
+			return nil, fmt.Errorf("%s.%s is not a parameter of the request schema", wrapper, k)
+		}
+		var typeOK bool
+		switch f.typ {
+		case "string":
+			_, typeOK = v.(string)
+		case "number":
+			_, typeOK = v.(float64)
+		case "boolean":
+			_, typeOK = v.(bool)
+		}
+		if !typeOK {
+			return nil, fmt.Errorf("%s.%s must be a %s, got %T", wrapper, k, f.typ, v)
+		}
+		if s, _ := v.(string); len(f.enum) > 0 && !slices.Contains(f.enum, s) {
+			return nil, fmt.Errorf("%s.%s must be one of %v, got %q", wrapper, k, f.enum, s)
 		}
 	}
 	return inner, nil
@@ -171,7 +246,7 @@ func (f *lbFake) children(id string) []*lbObj {
 }
 
 func (f *lbFake) createLoadBalancer(_ *http.Request, body map[string]any) (int, any) {
-	in, err := bodyOf(body, "loadbalancer", []string{"name"})
+	in, err := bodyOf(body, "loadbalancer", createLoadBalancerReq)
 	if err != nil {
 		return fault(400, "%s", err)
 	}
@@ -189,7 +264,7 @@ func (f *lbFake) createLoadBalancer(_ *http.Request, body map[string]any) (int, 
 }
 
 func (f *lbFake) createListener(_ *http.Request, body map[string]any) (int, any) {
-	in, err := bodyOf(body, "listener", []string{"protocol", "protocol_port", "loadbalancer_id", "name"})
+	in, err := bodyOf(body, "listener", createListenerReq)
 	if err != nil {
 		return fault(400, "%s", err)
 	}
@@ -213,7 +288,7 @@ func (f *lbFake) createListener(_ *http.Request, body map[string]any) (int, any)
 }
 
 func (f *lbFake) createPool(_ *http.Request, body map[string]any) (int, any) {
-	in, err := bodyOf(body, "pool", []string{"lb_algorithm", "protocol", "listener_id", "name"})
+	in, err := bodyOf(body, "pool", createPoolReq)
 	if err != nil {
 		return fault(400, "%s", err)
 	}
@@ -233,7 +308,7 @@ func (f *lbFake) createPool(_ *http.Request, body map[string]any) (int, any) {
 }
 
 func (f *lbFake) createMember(r *http.Request, body map[string]any) (int, any) {
-	in, err := bodyOf(body, "member", []string{"name", "address", "protocol_port"})
+	in, err := bodyOf(body, "member", createMemberReq)
 	if err != nil {
 		return fault(400, "%s", err)
 	}
@@ -251,15 +326,25 @@ func (f *lbFake) createMember(r *http.Request, body map[string]any) (int, any) {
 }
 
 func (f *lbFake) createHealthMonitor(_ *http.Request, body map[string]any) (int, any) {
-	in, err := bodyOf(body, "healthmonitor", []string{"name", "pool_id", "delay", "max_retries", "timeout", "type"}, "url_path", "expected_codes")
+	in, err := bodyOf(body, "healthmonitor", createHealthmonitorReq)
 	if err != nil {
 		return fault(400, "%s", err)
 	}
+	// 仕様は url_path と expected_codes を省略可とする. 省いた HTTP・HTTPS には OpenStack の既定値を入れ、
+	// それ以外の type に送られたら OpenStack と同じく拒否する
 	typ, _ := in["type"].(string)
-	_, hasPath := in["url_path"]
-	_, hasCodes := in["expected_codes"]
-	if isHTTP := typ == "HTTP" || typ == "HTTPS"; isHTTP != hasPath || isHTTP != hasCodes {
-		return fault(400, "url_path and expected_codes must be sent exactly for HTTP/HTTPS, type %s", typ)
+	isHTTP := typ == "HTTP" || typ == "HTTPS"
+	fields := map[string]any{"url_path": nil, "expected_codes": nil}
+	for k, def := range map[string]string{"url_path": "/", "expected_codes": "200"} {
+		v, sent := in[k]
+		switch {
+		case sent && !isHTTP:
+			return fault(400, "%s is only valid for HTTP and HTTPS health monitors, type %s", k, typ)
+		case sent:
+			fields[k] = v
+		case isHTTP:
+			fields[k] = def
+		}
 	}
 	poolID, _ := in["pool_id"].(string)
 	p, ok := f.objs[poolID]
@@ -274,10 +359,9 @@ func (f *lbFake) createHealthMonitor(_ *http.Request, body map[string]any) (int,
 			return fault(409, "This pool already has a health monitor")
 		}
 	}
-	o := f.add("healthmonitor", poolID, p.lbID, map[string]any{
-		"name": in["name"], "type": typ, "delay": in["delay"], "timeout": in["timeout"], "max_retries": in["max_retries"],
-		"url_path": in["url_path"], "expected_codes": in["expected_codes"],
-	})
+	fields["name"], fields["type"], fields["delay"], fields["timeout"], fields["max_retries"] =
+		in["name"], typ, in["delay"], in["timeout"], in["max_retries"]
+	o := f.add("healthmonitor", poolID, p.lbID, fields)
 	return 201, map[string]any{"healthmonitor": f.view(o)}
 }
 
@@ -313,17 +397,13 @@ func (f *lbFake) update(kind string) lbHandler {
 		}
 		var in map[string]any
 		var err error
-		switch kind {
-		case "pool":
-			in, err = bodyOf(body, kind, nil, "lb_algorithm", "name")
-		case "member":
-			in, err = bodyOf(body, kind, []string{"admin_state_up"})
-			if _, isBool := in["admin_state_up"].(bool); err == nil && !isBool {
-				err = fmt.Errorf("admin_state_up must be a boolean")
-			}
-		default:
-			in, err = bodyOf(body, kind, []string{"name"})
-		}
+		in, err = bodyOf(body, kind, map[string]specSchema{
+			"loadbalancer":  updateLoadBalancerReq,
+			"listener":      updateListenerReq,
+			"pool":          updatePoolReq,
+			"member":        updateMemberReq,
+			"healthmonitor": updateHealthmonitorReq,
+		}[kind])
 		if err != nil {
 			return fault(400, "%s", err)
 		}
@@ -337,7 +417,8 @@ func (f *lbFake) update(kind string) lbHandler {
 			o.fields[k] = v
 		}
 		f.touch(o, "PENDING_UPDATE")
-		return 200, map[string]any{kind: f.view(o)}
+		// 仕様の更新の成功は 202
+		return 202, map[string]any{kind: f.view(o)}
 	}
 }
 
@@ -385,7 +466,8 @@ func (f *lbFake) members(pool *lbObj) []*lbObj {
 	return out
 }
 
-// ドキュメントの応答の形にする（紐づくリソースは [{"id": ...}] で返す）.
+// 仕様の応答スキーマの形にする. 紐づくリソースは [{"id": ...}] で返すが、プールの members だけは
+// 仕様どおり ID の文字列の配列で返す.
 func (f *lbFake) view(o *lbObj) map[string]any {
 	v := map[string]any{}
 	for k, x := range o.fields {
@@ -420,7 +502,11 @@ func (f *lbFake) view(o *lbObj) map[string]any {
 	case "listener":
 		v["loadbalancers"] = refs(o.lbID)
 	case "pool":
-		v["loadbalancers"], v["listeners"], v["members"] = refs(o.lbID), refs(o.parent), refs(idsOf(id, "member")...)
+		members := idsOf(id, "member")
+		if members == nil {
+			members = []string{}
+		}
+		v["loadbalancers"], v["listeners"], v["members"] = refs(o.lbID), refs(o.parent), members
 	case "healthmonitor":
 		v["pools"] = refs(o.parent)
 	}
@@ -444,4 +530,11 @@ func (f *lbFake) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.objs)
+}
+
+// Terraform の外での変更として、偽の API のオブジェクトの項目を書き換える.
+func (f *lbFake) setField(id, key string, v any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.objs[id].fields[key] = v
 }

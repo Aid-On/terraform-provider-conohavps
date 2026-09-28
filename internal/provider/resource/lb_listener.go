@@ -41,6 +41,9 @@ type lbListenerResourceModel struct {
 	Protocol        types.String `tfsdk:"protocol"`
 	ProtocolPort    types.Int64  `tfsdk:"protocol_port"`
 	LoadBalancerID  types.String `tfsdk:"loadbalancer_id"`
+	ConnectionLimit types.Int64  `tfsdk:"connection_limit"`
+	DefaultPoolID   types.String `tfsdk:"default_pool_id"`
+	AdminStateUp    types.Bool   `tfsdk:"admin_state_up"`
 	OperatingStatus types.String `tfsdk:"operating_status"`
 }
 
@@ -67,7 +70,7 @@ func (r *lbListenerResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					stringvalidator.LengthBetween(1, 255),
 				},
 			},
-			// ドキュメントの更新 API はリスナー名しか変えられないため、それ以外は作り直す
+			// 仕様の更新 API（UpdateListenerReq）はリスナー名しか変えられないため、それ以外は作り直す
 			"protocol": schema.StringAttribute{
 				MarkdownDescription: "The protocol to accept connections with. Allowed values: `TCP`, `UDP`. Changing this creates a new listener.",
 				Required:            true,
@@ -95,6 +98,21 @@ func (r *lbListenerResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
+			"connection_limit": schema.Int64Attribute{
+				MarkdownDescription: "The maximum number of connections the listener accepts; `-1` means unlimited. " +
+					"The API does not accept this value on create or update, so it is read only.",
+				Computed: true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
+			},
+			// プールを作ると API が設定するため、リスナーの更新の後は読み直した値にする
+			"default_pool_id": schema.StringAttribute{
+				MarkdownDescription: "The ID of the pool that the listener forwards to, set by the API when a pool is created for the listener. " +
+					"`null` until then.",
+				Computed: true,
+			},
+			"admin_state_up": lbReadOnlyAdminStateUp("listener"),
 			"operating_status": schema.StringAttribute{
 				MarkdownDescription: "The operating status of the listener.",
 				Computed:            true,
@@ -230,5 +248,8 @@ func (m *lbListenerResourceModel) fill(l *service.LBListener) {
 	if id := l.LoadBalancerID(); id != "" {
 		m.LoadBalancerID = types.StringValue(id)
 	}
+	m.ConnectionLimit = types.Int64Value(int64(l.ConnectionLimit))
+	m.DefaultPoolID = lbNullableString(l.DefaultPoolID)
+	m.AdminStateUp = types.BoolValue(l.AdminStateUp)
 	m.OperatingStatus = types.StringValue(l.OperatingStatus)
 }
