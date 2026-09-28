@@ -1,5 +1,5 @@
 // オブジェクトストレージのリソースの単体テストで使う、偽のオブジェクトストレージ API を提供する.
-// ドキュメントのリクエスト（ヘッダーで設定し本文を持たない）とレスポンス（ヘッダーで値を返す）を
+// OpenAPI 仕様のリクエスト（ヘッダーで設定し本文を持たない）とレスポンス（ヘッダーで値を返す、HEAD は 204）を
 // メモリ上の状態で再現し、受けたリクエストを記録して検証できるようにする.
 
 package resource_test
@@ -7,7 +7,9 @@ package resource_test
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -26,8 +28,10 @@ type recordedRequest struct {
 type fakeContainer struct {
 	objects          int64
 	bytes            int64
-	versionsLocation string
-	containerRead    string
+	versionsLocation string            // 受けたまま（URL エンコードされた形）で持ち、そのまま返す
+	containerRead    string            // x-container-read
+	containerWrite   string            // x-container-write
+	meta             map[string]string // x-container-meta-*（キーは小文字）
 }
 
 // 偽のオブジェクトストレージ.
@@ -37,13 +41,14 @@ type fakeObjectStorage struct {
 	quotaBytes int64 // x-account-meta-quota-bytes（1GB = 1024^3 byte として返す）
 	usedBytes  int64 // コンテナに属さない使用量（テストで使用量を作るため）
 	containers map[string]*fakeContainer
+	hidden     map[string]bool // HEAD に 404 を返すコンテナ（確かめた後に作られた場合を再現する）
 	requests   []recordedRequest
 }
 
 const gib = int64(1) << 30
 
 func newFakeObjectStorage(t *testing.T) *fakeObjectStorage {
-	f := &fakeObjectStorage{Server: fakeapi.New(t), containers: map[string]*fakeContainer{}}
+	f := &fakeObjectStorage{Server: fakeapi.New(t), containers: map[string]*fakeContainer{}, hidden: map[string]bool{}}
 
 	f.handle("HEAD "+objectStorageBase, func(w http.ResponseWriter, _ *http.Request) {
 		var objects, bytes int64
@@ -80,17 +85,28 @@ func newFakeObjectStorage(t *testing.T) *fakeObjectStorage {
 
 	f.handle("PUT "+objectStorageBase+"/{container}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("container")
-		if _, ok := f.containers[name]; ok {
+		c, exists := f.containers[name]
+		if !exists {
+			c = &fakeContainer{meta: map[string]string{}}
+		}
+		if v := r.Header.Values("X-Versions-Location"); len(v) > 0 {
+			if err := f.setVersionsLocation(c, v[0]); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if exists {
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		f.containers[name] = &fakeContainer{}
+		f.containers[name] = c
 		w.WriteHeader(http.StatusCreated)
 	})
 
 	f.handle("HEAD "+objectStorageBase+"/{container}", func(w http.ResponseWriter, r *http.Request) {
-		c, ok := f.containers[r.PathValue("container")]
-		if !ok {
+		name := r.PathValue("container")
+		c, ok := f.containers[name]
+		if !ok || f.hidden[name] {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -105,6 +121,12 @@ func newFakeObjectStorage(t *testing.T) *fakeObjectStorage {
 		if c.containerRead != "" {
 			h.Set("X-Container-Read", c.containerRead)
 		}
+		if c.containerWrite != "" {
+			h.Set("X-Container-Write", c.containerWrite)
+		}
+		for k, v := range c.meta {
+			h.Set("X-Container-Meta-"+k, v)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -114,18 +136,37 @@ func newFakeObjectStorage(t *testing.T) *fakeObjectStorage {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if v, ok := r.Header["X-Versions-Location"]; ok {
-			if _, exists := f.containers[v[0]]; !exists {
-				http.Error(w, "versions location container does not exist", http.StatusBadRequest)
-				return
+		// Swift と同じく、X-Remove- のヘッダーと値が空のヘッダーは解除として扱う
+		for key, values := range r.Header {
+			name, removed := strings.CutPrefix(key, "X-Remove-")
+			if removed {
+				name = "X-" + name
 			}
-			c.versionsLocation = v[0]
-		}
-		if _, ok := r.Header["X-Remove-Versions-Location"]; ok {
-			c.versionsLocation = ""
-		}
-		if v, ok := r.Header["X-Container-Read"]; ok {
-			c.containerRead = v[0]
+			remove := removed || values[0] == ""
+			switch {
+			case name == "X-Versions-Location" && remove:
+				c.versionsLocation = ""
+			case name == "X-Versions-Location":
+				if err := f.setVersionsLocation(c, values[0]); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case name == "X-Container-Read" && remove:
+				c.containerRead = ""
+			case name == "X-Container-Read":
+				c.containerRead = values[0]
+			case name == "X-Container-Write" && remove:
+				c.containerWrite = ""
+			case name == "X-Container-Write":
+				c.containerWrite = values[0]
+			case strings.HasPrefix(name, "X-Container-Meta-"):
+				meta := strings.ToLower(strings.TrimPrefix(name, "X-Container-Meta-"))
+				if remove {
+					delete(c.meta, meta)
+				} else {
+					c.meta[meta] = values[0]
+				}
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -161,6 +202,19 @@ func (f *fakeObjectStorage) handle(pattern string, h http.HandlerFunc) {
 	})
 }
 
+// X-Versions-Location の値（URL エンコードされたコンテナ名）を設定する. 保存先のコンテナが無ければエラーにする.
+func (f *fakeObjectStorage) setVersionsLocation(c *fakeContainer, v string) error {
+	name, err := url.PathUnescape(v)
+	if err != nil {
+		return fmt.Errorf("the versions location %q is not URL-encoded: %w", v, err)
+	}
+	if _, exists := f.containers[name]; !exists {
+		return fmt.Errorf("versions location container %q does not exist", name)
+	}
+	c.versionsLocation = v
+	return nil
+}
+
 func (f *fakeObjectStorage) accountUsed() int64 {
 	used := f.usedBytes
 	for _, c := range f.containers {
@@ -190,7 +244,6 @@ func (f *fakeObjectStorage) with(fn func(f *fakeObjectStorage)) {
 }
 
 // 最後の該当リクエストが、ヘッダー key を値 want で持つかを確かめる.
-// want が空なら、値が空のヘッダーが送られたこと（ドキュメントの解除の形）を確かめる.
 func (f *fakeObjectStorage) expectHeader(method, path, key, want string) error {
 	found := f.find(method, path)
 	if len(found) == 0 {

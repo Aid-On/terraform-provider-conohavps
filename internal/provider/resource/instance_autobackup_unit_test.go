@@ -1,5 +1,5 @@
 // サーバーの自動バックアップのリソースの単体テストを提供する.
-// 偽の ConoHa API で有効化・インポート・保存期間の変更（無効化してから有効化）・サーバー削除の検知・無効化を検証する.
+// 偽の ConoHa API で有効化・インポート・保存期間のその場での変更・サーバー削除の検知・解約を検証する.
 
 package resource_test
 
@@ -28,7 +28,8 @@ type autoBackupFake struct {
 	servers map[string]bool
 	enabled map[string]float64 // サーバー ID → 保存期間
 	bodies  []map[string]any   // 有効化のリクエストの本文
-	calls   []string           // 有効化・無効化の呼び出し順
+	updates []map[string]any   // 保存期間の変更のリクエストの本文
+	calls   []string           // 有効化・保存期間の変更・解約の呼び出し順
 }
 
 func newAutoBackupFake(t *testing.T) *autoBackupFake {
@@ -61,6 +62,34 @@ func newAutoBackupFake(t *testing.T) *autoBackupFake {
 		fakeapi.WriteJSON(w, http.StatusCreated, map[string]any{"backup": map[string]any{"instance_uuid": sid, "id": f.NewID("backup")}})
 	})
 
+	// 保存期間の変更（block-storage/update-backup）. 日次バックアップを申し込んでいないサーバーには 404 を返す
+	f.Mux.HandleFunc("PUT /block-storage/v3/tenant/backups/{sid}", func(w http.ResponseWriter, r *http.Request) {
+		if !fakeapi.Authorized(w, r) {
+			return
+		}
+		var body map[string]any
+		if err := fakeapi.ReadJSON(r, &body); err != nil {
+			fakeapi.WriteJSON(w, http.StatusBadRequest, map[string]any{"badRequest": map[string]any{"message": err.Error()}})
+			return
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.updates = append(f.updates, body)
+		sid := r.PathValue("sid")
+		if _, ok := f.enabled[sid]; !ok {
+			fakeapi.WriteJSON(w, http.StatusNotFound, map[string]any{"itemNotFound": map[string]any{"message": "backup not found"}})
+			return
+		}
+		retention, _ := body["backup"].(map[string]any)["retention"].(float64)
+		if retention < 14 || retention > 30 {
+			fakeapi.WriteJSON(w, http.StatusBadRequest, map[string]any{"badRequest": map[string]any{"message": "invalid retention"}})
+			return
+		}
+		f.enabled[sid] = retention
+		f.calls = append(f.calls, "update")
+		fakeapi.WriteJSON(w, http.StatusOK, map[string]any{"backup": map[string]any{"retention": retention}})
+	})
+
 	f.Mux.HandleFunc("DELETE /block-storage/v3/tenant/backups/{sid}", func(w http.ResponseWriter, r *http.Request) {
 		if !fakeapi.Authorized(w, r) {
 			return
@@ -88,7 +117,7 @@ func newAutoBackupFake(t *testing.T) *autoBackupFake {
 			fakeapi.WriteJSON(w, http.StatusNotFound, map[string]any{"itemNotFound": map[string]any{"message": "server not found"}})
 			return
 		}
-		// 自動バックアップが有効なサーバーは、メタデータに backup_status などが載る（サーバー詳細取得のドキュメント）
+		// 自動バックアップが有効なサーバーは、メタデータに backup_status などが載る（サーバー詳細取得のドキュメントの応答例. API 仕様には定義が無い）
 		metadata := map[string]any{"instance_name_tag": sid}
 		if _, ok := f.enabled[sid]; ok {
 			metadata["backup_status"] = "active"
@@ -110,7 +139,7 @@ resource "conohavps_instance_autobackup" "test" {
 `
 }
 
-// 最後の有効化のリクエストの本文がドキュメントどおりであることを確かめる.
+// 最後の有効化のリクエストの本文が API 仕様どおりであることを確かめる（非推奨の schedule は送らない）.
 func (f *autoBackupFake) checkLastBody(retention float64) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		f.mu.Lock()
@@ -118,10 +147,39 @@ func (f *autoBackupFake) checkLastBody(retention float64) resource.TestCheckFunc
 		if len(f.bodies) == 0 {
 			return fmt.Errorf("no enabling request was sent")
 		}
-		want := map[string]any{"backup": map[string]any{"instance_uuid": "srv-1", "schedule": "daily", "retention": retention}}
+		want := map[string]any{"backup": map[string]any{"instance_uuid": "srv-1", "retention": retention}}
 		if got := f.bodies[len(f.bodies)-1]; !reflect.DeepEqual(got, want) {
 			g, _ := json.Marshal(got)
-			return fmt.Errorf("enabling request body = %s, want instance_uuid, schedule daily and retention %v", g, retention)
+			return fmt.Errorf("enabling request body = %s, want instance_uuid and retention %v", g, retention)
+		}
+		return nil
+	}
+}
+
+// 最後の保存期間の変更のリクエストの本文が API 仕様どおりであることを確かめる.
+func (f *autoBackupFake) checkLastUpdate(retention float64) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if len(f.updates) == 0 {
+			return fmt.Errorf("no retention update request was sent")
+		}
+		want := map[string]any{"backup": map[string]any{"retention": retention}}
+		if got := f.updates[len(f.updates)-1]; !reflect.DeepEqual(got, want) {
+			g, _ := json.Marshal(got)
+			return fmt.Errorf("retention update request body = %s, want retention %v", g, retention)
+		}
+		return nil
+	}
+}
+
+// 有効化・保存期間の変更・解約の呼び出し順を確かめる.
+func (f *autoBackupFake) checkCalls(want ...string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if !reflect.DeepEqual(f.calls, want) {
+			return fmt.Errorf("calls = %v, want %v", f.calls, want)
 		}
 		return nil
 	}
@@ -172,26 +230,27 @@ func TestInstanceAutoBackupResource_Unit(t *testing.T) {
 				ImportState:       true,
 				ImportStateVerify: true,
 			},
-			// 保存期間を変えると、無効化してから有効化し直す
+			// 非推奨の schedule を daily と書いた既存の設定は、差分にならない
+			{
+				Config: f.config(`  schedule = "daily"`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			// 保存期間を変えると、解約・再申し込みをせずに更新 API でその場で変える
 			{
 				Config: f.config("  retention = 30"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(addr, plancheck.ResourceActionDestroyBeforeCreate)},
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate)},
 				},
 				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(addr, tfjsonpath.New("id"), knownvalue.StringExact("srv-1")),
 					statecheck.ExpectKnownValue(addr, tfjsonpath.New("retention"), knownvalue.Int64Exact(30)),
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
-					f.checkLastBody(30),
+					f.checkLastUpdate(30),
 					f.checkEnabled(30),
-					func(*terraform.State) error {
-						f.mu.Lock()
-						defer f.mu.Unlock()
-						if want := []string{"enable", "disable", "enable"}; !reflect.DeepEqual(f.calls, want) {
-							return fmt.Errorf("calls = %v, want %v", f.calls, want)
-						}
-						return nil
-					},
+					f.checkCalls("enable", "update"),
 				),
 			},
 			// `<instance_id>/<retention>` で保存期間ごと取り込む
@@ -233,6 +292,21 @@ func TestInstanceAutoBackupResource_Unit(t *testing.T) {
 				},
 				Check: resource.ComposeTestCheckFunc(f.checkEnabled(30), f.checkLastBody(30)),
 			},
+			// 保存期間を書かなくなると、既定値の 14 にその場で戻す
+			{
+				Config: f.config(""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(addr, plancheck.ResourceActionUpdate)},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(addr, tfjsonpath.New("retention"), knownvalue.Int64Exact(14)),
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					f.checkLastUpdate(14),
+					f.checkEnabled(14),
+					f.checkCalls("enable", "update", "enable", "update"),
+				),
+			},
 			// サーバーが消えたら State から外し、作り直す計画になる
 			{
 				PreConfig: func() {
@@ -240,7 +314,7 @@ func TestInstanceAutoBackupResource_Unit(t *testing.T) {
 					defer f.mu.Unlock()
 					delete(f.servers, "srv-1")
 				},
-				Config:             f.config("  retention = 30"),
+				Config:             f.config(""),
 				PlanOnly:           true,
 				ExpectNonEmptyPlan: true,
 			},
@@ -251,8 +325,8 @@ func TestInstanceAutoBackupResource_Unit(t *testing.T) {
 					defer f.mu.Unlock()
 					f.servers["srv-1"] = true
 				},
-				Config: f.config("  retention = 30"),
-				Check:  f.checkEnabled(30),
+				Config: f.config(""),
+				Check:  f.checkEnabled(14),
 			},
 		},
 	})

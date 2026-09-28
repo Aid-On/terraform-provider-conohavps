@@ -136,7 +136,7 @@ resource "conohavps_volume_attachment" "test" {
 `, volumeID)
 }
 
-// 最後のアタッチのリクエストの本文が、ドキュメントどおり volumeAttachment.volumeId だけであることを確かめる.
+// 最後のアタッチのリクエストの本文が、API 仕様（NovaAttachVolumeReq）どおり volumeAttachment.volumeId だけであることを確かめる.
 func (f *volumeAttachFake) checkLastBody(volumeID string) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		f.mu.Lock()

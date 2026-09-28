@@ -2,15 +2,15 @@
 page_title: "conohavps_instance_autobackup Resource - terraform-provider-conohavps"
 subcategory: "Volume"
 description: |-
-  Enables auto-backup of the volumes attached to a server. The boot storage volume and, when attached, the additional storage volume are backed up. Destroying this resource disables auto-backup of the server.
-  Whether auto-backup is enabled is read from the server's metadata (backup_status), so disabling it outside Terraform shows as a change that enables it again. The API does not return the retention, so a retention changed outside Terraform is not detected. The API has no update operation, so changing schedule or retention disables auto-backup and enables it again.
+  Enables daily auto-backup of the volumes attached to a server. The boot storage volume and, when attached, the additional storage volume are backed up. Changing retention updates it in place. Destroying this resource cancels auto-backup of the server (both daily and weekly); backups already taken are not deleted, and conohavps_backups still lists them.
+  Whether auto-backup is enabled is read from the server's metadata (backup_status), so cancelling it outside Terraform shows as a change that enables it again. No API returns the retention, so retention is kept as Terraform last set it, and a retention changed outside Terraform is not detected.
 ---
 
 # conohavps_instance_autobackup (Resource)
 
-Enables auto-backup of the volumes attached to a server. The boot storage volume and, when attached, the additional storage volume are backed up. Destroying this resource disables auto-backup of the server.
+Enables daily auto-backup of the volumes attached to a server. The boot storage volume and, when attached, the additional storage volume are backed up. Changing `retention` updates it in place. Destroying this resource cancels auto-backup of the server (both daily and weekly); backups already taken are not deleted, and `conohavps_backups` still lists them.
 
-Whether auto-backup is enabled is read from the server's metadata (`backup_status`), so disabling it outside Terraform shows as a change that enables it again. The API does not return the retention, so a retention changed outside Terraform is not detected. The API has no update operation, so changing `schedule` or `retention` disables auto-backup and enables it again.
+Whether auto-backup is enabled is read from the server's metadata (`backup_status`), so cancelling it outside Terraform shows as a change that enables it again. No API returns the retention, so `retention` is kept as Terraform last set it, and a retention changed outside Terraform is not detected.
 
 ## Example Usage
 
@@ -31,8 +31,8 @@ resource "conohavps_instance_autobackup" "example" {
 
 ### Optional
 
-- `retention` (Number) The retention period of backups in days, from 14 to 30. Defaults to 14. Changing this value will force the resource to be recreated.
-- `schedule` (String) The backup schedule. Allowed value: `daily`. Defaults to `daily`. Changing this value will force the resource to be recreated.
+- `retention` (Number) The number of days daily backups are kept, from 14 to 30. Defaults to 14. Changing this value updates it in place. No API returns this value, so it is not refreshed from ConoHa.
+- `schedule` (String, Deprecated) The backup schedule. Only `daily` is allowed, and it is the default. The API has deprecated this parameter and the provider does not send it; omit it.
 
 ### Read-Only
 
@@ -40,7 +40,7 @@ resource "conohavps_instance_autobackup" "example" {
 
 ## Import
 
-Auto-backup can be imported using the server ID. The API cannot read back the retention, so it is taken as 14 days unless given as `<instance_id>/<retention>` .
+Auto-backup can be imported using the server ID. No API returns the retention, so it is taken as 14 days unless given as `<instance_id>/<retention>` .
 
 ```shell
 $ terraform import conohavps_instance_autobackup.example {{server_uuid}}/30

@@ -13,12 +13,15 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// イメージ保存容量の単位（GB）.
+// イメージ保存容量の単位（GB）. OpenAPI 仕様の PUT /v2/quota は「無料分の 50GB 以下は設定できません」
+// 「500GB 毎 + デフォルト値の 50GB を加えた単位で設定が可能です（例: 550, 1050GB, ...）」とする.
 const (
 	// ImageQuotaDefaultGB は既定（無料）のイメージ保存容量. これより小さくは設定できない.
 	ImageQuotaDefaultGB int64 = 50
 	// ImageQuotaStepGB は既定の容量に加えられる単位.
 	ImageQuotaStepGB int64 = 500
+	// ImageQuotaMinPaidGB は利用者が指定できる最小の容量（無料分に 1 単位を加えたもの）.
+	ImageQuotaMinPaidGB = ImageQuotaDefaultGB + ImageQuotaStepGB
 )
 
 // イメージ保存容量のリクエストとレスポンスの本文.
@@ -109,7 +112,7 @@ func (c *ConohaClient) GetImageUsage(ctx context.Context) (int64, error) {
 	return body.Images.Size, nil
 }
 
-// ValidImageQuota はドキュメントの刻み（50GB に 500GB 単位で加える）に合うかを返す.
+// ValidImageQuota は刻み（50GB に 500GB 単位で加える）に合うかを返す. 無料分に戻す 50GB も含む.
 func ValidImageQuota(gb int64) bool {
 	return gb >= ImageQuotaDefaultGB && (gb-ImageQuotaDefaultGB)%ImageQuotaStepGB == 0
 }
@@ -119,9 +122,13 @@ func FormatImageSize(gb int64) string {
 	return strconv.FormatInt(gb, 10) + "GB"
 }
 
-// ParseImageSize は API の形（"550GB"）を GB にする.
+// ParseImageSize は API の形（"550GB"）を GB にする. 単位が GB でなければ、推測で換算せずエラーにする.
 func ParseImageSize(s string) (int64, error) {
-	n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "GB")), 10, 64)
+	v, ok := strings.CutSuffix(strings.TrimSpace(s), "GB")
+	if !ok {
+		return 0, fmt.Errorf("failed to parse the image size %q: the unit is not GB", s)
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse the image size %q: %w", s, err)
 	}

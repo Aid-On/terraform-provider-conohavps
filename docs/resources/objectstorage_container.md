@@ -2,12 +2,15 @@
 page_title: "conohavps_objectstorage_container Resource - terraform-provider-conohavps"
 subcategory: "Object Storage"
 description: |-
-  Manages an object storage container. Objects cannot be stored until the account has a capacity; set it with conohavps_objectstorage_quota. A container that still holds objects cannot be deleted: destroying it fails with the API's error until the objects are removed (this provider does not manage objects).
+  Manages an object storage container. Objects cannot be stored until the account has a capacity; set it with conohavps_objectstorage_quota. A container that still holds objects cannot be deleted: destroying it fails with the API's error (409) until the objects are removed (this provider does not manage objects).
+  Every setting is read back from the container, so a value changed outside Terraform shows as a difference, and a setting that is not in the configuration is removed on the next apply. To publish the container on the web, allow everyone to read it with container_read = ".r:*", and set web_index to serve an index file.
 ---
 
 # conohavps_objectstorage_container (Resource)
 
-Manages an object storage container. Objects cannot be stored until the account has a capacity; set it with `conohavps_objectstorage_quota`. A container that still holds objects cannot be deleted: destroying it fails with the API's error until the objects are removed (this provider does not manage objects).
+Manages an object storage container. Objects cannot be stored until the account has a capacity; set it with `conohavps_objectstorage_quota`. A container that still holds objects cannot be deleted: destroying it fails with the API's error (409) until the objects are removed (this provider does not manage objects).
+
+Every setting is read back from the container, so a value changed outside Terraform shows as a difference, and a setting that is not in the configuration is removed on the next apply. To publish the container on the web, allow everyone to read it with `container_read = ".r:*"`, and set `web_index` to serve an index file.
 
 ## Example Usage
 
@@ -22,11 +25,19 @@ resource "conohavps_objectstorage_container" "archive" {
   name = "photos-archive"
 }
 
-# Container published on the web, with object versioning
+# Container published on the web as a static site, with object versioning
 resource "conohavps_objectstorage_container" "photos" {
   name              = "photos"
   versions_location = conohavps_objectstorage_container.archive.name
-  web_publishing    = true
+
+  # Everyone can read the objects; index.html is served for directories
+  container_read = ".r:*"
+  web_index      = "index.html"
+  web_error      = "error.html"
+
+  metadata = {
+    owner = "web-team"
+  }
 }
 ```
 
@@ -39,8 +50,14 @@ resource "conohavps_objectstorage_container" "photos" {
 
 ### Optional
 
-- `versions_location` (String) The name of the container that keeps old versions of objects (object versioning). When an object with the same name is uploaded, the old object is saved to this container with a timestamp. The container must already exist; reference its `conohavps_objectstorage_container` so that it is created first. Removing this value turns versioning off.
-- `web_publishing` (Boolean) Whether the objects in the container are published on the web, by allowing read access to everyone (`X-Container-Read: .r:*`). Defaults to `false`.
+- `container_read` (String) The access control list that grants read access (`X-Container-Read`), as comma-separated grants without spaces. `.r:*` lets everyone read the objects, which publishes them on the web; `.r:*,.rlistings` also lets everyone list them. Removing this value removes the ACL.
+- `container_write` (String) The access control list that grants write access (`X-Container-Write`), as comma-separated grants without spaces. Removing this value removes the ACL.
+- `metadata` (Map of String) Custom metadata of the container (`X-Container-Meta-{key}`). Keys must be lowercase letters, digits, hyphens and dots; the keys that other attributes manage (`web-index`, `web-listings`, `web-listings-css`, `web-error`) and the temporary URL keys (`temp-url-key`, `temp-url-key-2`) cannot be used. Metadata set outside Terraform shows as a difference and is removed on the next apply.
+- `versions_location` (String) The name of the container that keeps old versions of objects (object versioning, `X-Versions-Location`). When an object with the same name is uploaded, the old object is saved to this container. The container must already exist; reference its `conohavps_objectstorage_container` so that it is created first. Removing this value turns versioning off.
+- `web_error` (String) The suffix of the error files served when the container is published on the web, such as `error.html`, which serves `404error.html` for a missing object (`X-Container-Meta-Web-Error`).
+- `web_index` (String) The index file served for the container and its pseudo-directories when it is published on the web, such as `index.html` (`X-Container-Meta-Web-Index`). It takes effect only when `container_read` lets everyone read.
+- `web_listings` (Boolean) Whether a pseudo-directory without an index file is shown as an HTML list of its objects when the container is published on the web (`X-Container-Meta-Web-Listings`). Leaving it unset removes the setting, which the API treats as `false`.
+- `web_listings_css` (String) The stylesheet used for the object lists of `web_listings` (`X-Container-Meta-Web-Listings-CSS`).
 
 ### Read-Only
 

@@ -2,12 +2,12 @@
 page_title: "conohavps_port_attachment Resource - terraform-provider-conohavps"
 subcategory: "Network"
 description: |-
-  Attaches a port (a conohavps_port on a local network or a conohavps_additional_ip) to a server. Destroying it detaches the port and waits until the server no longer lists it.
+  Attaches a port (a conohavps_port on a local network or a conohavps_additional_ip) to a server. The server must be running or stopped (ACTIVE or SHUTOFF), not in the middle of another operation. Attaching completes in the API call; destroying it detaches the port and waits until the server no longer lists it.
 ---
 
 # conohavps_port_attachment (Resource)
 
-Attaches a port (a `conohavps_port` on a local network or a `conohavps_additional_ip`) to a server. Destroying it detaches the port and waits until the server no longer lists it.
+Attaches a port (a `conohavps_port` on a local network or a `conohavps_additional_ip`) to a server. The server must be running or stopped (`ACTIVE` or `SHUTOFF`), not in the middle of another operation. Attaching completes in the API call; destroying it detaches the port and waits until the server no longer lists it.
 
 ## Example Usage
 

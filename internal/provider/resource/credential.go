@@ -128,9 +128,6 @@ func (r *credentialResource) Create(ctx context.Context, req resource.CreateRequ
 	tflog.Debug(ctx, "Credential creation request completed.", map[string]any{"access": credential.Access})
 
 	setCredentialModel(&data, credential)
-	if data.TenantID.ValueString() == "" {
-		data.TenantID = types.StringValue(tenantID)
-	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -196,17 +193,11 @@ func (r *credentialResource) ImportState(ctx context.Context, req resource.Impor
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), access)...)
 }
 
-// API のクレデンシャルをモデルへ写す. シークレットキーが返らなければ State の値を残す.
+// API のクレデンシャルをモデルへ写す. 作成と詳細取得の応答はどちらも全項目を返す.
 func setCredentialModel(data *credentialResourceModel, credential *service.Credential) {
 	data.ID = types.StringValue(credential.Access)
 	data.Access = types.StringValue(credential.Access)
-	if credential.UserID != "" {
-		data.UserID = types.StringValue(credential.UserID)
-	}
-	if tenant := credential.Tenant(); tenant != "" {
-		data.TenantID = types.StringValue(tenant)
-	}
-	if credential.Secret != "" {
-		data.Secret = types.StringValue(credential.Secret)
-	}
+	data.UserID = types.StringValue(credential.UserID)
+	data.TenantID = types.StringValue(credential.TenantID)
+	data.Secret = types.StringValue(credential.Secret)
 }

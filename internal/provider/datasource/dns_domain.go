@@ -27,11 +27,12 @@ type dnsDomainDataSource struct {
 }
 
 type dnsDomainDataSourceModel struct {
-	Name      types.String `tfsdk:"name"`       // ドメイン名
-	ID        types.String `tfsdk:"id"`         // ドメイン ID
-	TTL       types.Int64  `tfsdk:"ttl"`        // TTL（秒）
-	Email     types.String `tfsdk:"email"`      // 連絡先メールアドレス
-	ProjectID types.String `tfsdk:"project_id"` // テナント ID
+	Name        types.String `tfsdk:"name"`        // ドメイン名
+	ID          types.String `tfsdk:"id"`          // ドメイン ID
+	TTL         types.Int64  `tfsdk:"ttl"`         // TTL（秒）
+	Email       types.String `tfsdk:"email"`       // 連絡先メールアドレス
+	Description types.String `tfsdk:"description"` // 説明
+	ProjectID   types.String `tfsdk:"project_id"`  // テナント ID
 }
 
 func (d *dnsDomainDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -61,8 +62,12 @@ func (d *dnsDomainDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 				MarkdownDescription: "The contact email address of the domain.",
 				Computed:            true,
 			},
+			"description": schema.StringAttribute{
+				MarkdownDescription: "The description of the domain, or null if it has none.",
+				Computed:            true,
+			},
 			"project_id": schema.StringAttribute{
-				MarkdownDescription: "The tenant ID that owns the domain.",
+				MarkdownDescription: "The tenant ID that owns the domain, if ConoHa DNS returns it.",
 				Computed:            true,
 			},
 		},
@@ -96,6 +101,11 @@ func (d *dnsDomainDataSource) Read(ctx context.Context, req datasource.ReadReque
 	data.ID = types.StringValue(domain.ID)
 	data.TTL = types.Int64Value(domain.TTL)
 	data.Email = types.StringValue(domain.Email)
+	if domain.Description != "" {
+		data.Description = types.StringValue(domain.Description)
+	} else {
+		data.Description = types.StringNull()
+	}
 	data.ProjectID = types.StringValue(domain.ProjectID)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

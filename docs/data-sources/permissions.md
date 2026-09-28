@@ -2,12 +2,12 @@
 page_title: "conohavps_permissions Data Source - terraform-provider-conohavps"
 subcategory: "Identity"
 description: |-
-  Lists the permissions that can be granted by a conohavps_role. Each permission allows one API operation, such as get-server-list. There are no permissions for the role APIs, the Object Storage API and the DNS API.
+  Lists the permissions that can be granted by a conohavps_role. Each permission allows one API operation and is named <http method>-<resource>[-<sub-resource>][-<operation>], such as get-server-list. There are no permissions for the role APIs, the Object Storage API and the DNS API.
 ---
 
 # conohavps_permissions (Data Source)
 
-Lists the permissions that can be granted by a `conohavps_role`. Each permission allows one API operation, such as `get-server-list`. There are no permissions for the role APIs, the Object Storage API and the DNS API.
+Lists the permissions that can be granted by a `conohavps_role`. Each permission allows one API operation and is named `<http method>-<resource>[-<sub-resource>][-<operation>]`, such as `get-server-list`. There are no permissions for the role APIs, the Object Storage API and the DNS API.
 
 ## Example Usage
 

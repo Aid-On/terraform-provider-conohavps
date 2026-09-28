@@ -2,12 +2,12 @@
 page_title: "conohavps_additional_ip Resource - terraform-provider-conohavps"
 subcategory: "Network"
 description: |-
-  Manages additional IP addresses. ConoHa allocates the addresses on one port; attach it to a server with conohavps_port_attachment. The port cannot be deleted while it is attached to a server.
+  Manages additional IP addresses. ConoHa allocates the addresses on one port; attach it to a server with conohavps_port_attachment. The port cannot be deleted while it is attached to a server. ConoHa does not let additional IP addresses be cancelled for 30 days after allocation, and the fee grows with the number of addresses.
 ---
 
 # conohavps_additional_ip (Resource)
 
-Manages additional IP addresses. ConoHa allocates the addresses on one port; attach it to a server with `conohavps_port_attachment`. The port cannot be deleted while it is attached to a server.
+Manages additional IP addresses. ConoHa allocates the addresses on one port; attach it to a server with `conohavps_port_attachment`. The port cannot be deleted while it is attached to a server. ConoHa does not let additional IP addresses be cancelled for 30 days after allocation, and the fee grows with the number of addresses.
 
 ## Example Usage
 
@@ -37,7 +37,7 @@ resource "conohavps_additional_ip" "fast" {
 
 ### Optional
 
-- `qos_policy_id` (String) The ID of the QoS policy of the port (see the `conohavps_qos_policy` data source). It is set with a port update right after creation. Changing this value will update the port in place; removing it from the configuration keeps the current policy.
+- `qos_policy_id` (String) The ID of the QoS policy of the port (see the `conohavps_qos_policy` data source). The create API does not take it, so it is set with a port update right after creation. Changing this value will update the port in place, and a policy changed outside Terraform shows as a difference; removing it from the configuration keeps the current policy.
 - `security_group_ids` (Set of String) The IDs of the security groups of the port. When omitted, ConoHa sets the `default` security group. Changing this value will update the port in place; removing it from the configuration keeps the current security groups.
 
 ### Read-Only
@@ -47,6 +47,7 @@ resource "conohavps_additional_ip" "fast" {
 - `mac_address` (String) The MAC address of the port.
 - `name` (String) The name ConoHa gives the port, such as `add-i_100000-o_100000-p_0a`.
 - `network_id` (String) The ID of the network the addresses belong to.
+- `qos_network_policy_id` (String) The ID of the QoS policy of the network of the port, which applies when the port has no policy of its own. Null when the network has none.
 
 ## Import
 

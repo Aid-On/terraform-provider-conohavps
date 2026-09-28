@@ -1,6 +1,6 @@
 // ローカルネットワークのリソースの単体テストと、ネットワーク系のリソースの単体テストで共用する偽の API を提供する.
 // 偽の API はネットワーク・サブネット・ポート・追加IP・ポートのアタッチをメモリに持ち、
-// ドキュメントのレスポンスの形で返す. 受け取ったリクエストの本文を記録し、テストで確かめる.
+// OpenAPI 定義（PortRes・SubnetRes・ShowNetworkRes など）のレスポンスの形で返す. 受け取ったリクエストの本文を記録し、テストで確かめる.
 
 package resource_test
 
@@ -122,6 +122,12 @@ func (f *fakeNetworking) deleteNetwork(w http.ResponseWriter, r *http.Request, _
 		fakeapi.WriteJSON(w, http.StatusConflict, map[string]any{"NeutronError": "subnets remain"})
 		return
 	}
+	for _, p := range f.ports {
+		if p["network_id"] == r.PathValue("id") {
+			fakeapi.WriteJSON(w, http.StatusConflict, map[string]any{"NeutronError": "ports remain"})
+			return
+		}
+	}
 	delete(f.networks, r.PathValue("id"))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -236,7 +242,7 @@ func (f *fakeNetworking) newPort(name, netID string, ips, sgs any) map[string]an
 		"id": id, "name": name, "network_id": netID, "tenant_id": fakeapi.TenantID, "mac_address": "fa:16:3e:00:00:01",
 		"admin_state_up": true, "status": "DOWN", "device_id": "", "device_owner": "", "fixed_ips": ips,
 		"project_id": fakeapi.TenantID, "security_groups": sgs, "allowed_address_pairs": []any{}, "extra_dhcp_opts": []any{},
-		"binding:vnic_type": "normal", "qos_policy_id": nil,
+		"binding:vnic_type": "normal", "qos_policy_id": nil, "qos_network_policy_id": nil,
 	}
 }
 

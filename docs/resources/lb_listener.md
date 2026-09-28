@@ -36,6 +36,9 @@ resource "conohavps_lb_listener" "listener_1" {
 
 ### Read-Only
 
+- `admin_state_up` (Boolean) Whether the listener is administratively up. The API does not accept this value on create or update, so it is read only.
+- `connection_limit` (Number) The maximum number of connections the listener accepts; `-1` means unlimited. The API does not accept this value on create or update, so it is read only.
+- `default_pool_id` (String) The ID of the pool that the listener forwards to, set by the API when a pool is created for the listener. `null` until then.
 - `id` (String) The ID of the listener.
 - `operating_status` (String) The operating status of the listener.
 

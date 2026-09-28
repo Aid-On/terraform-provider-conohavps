@@ -47,6 +47,7 @@ type volumeSnapshotResourceModel struct {
 	Status      types.String `tfsdk:"status"`      // ステータス
 	Size        types.Int64  `tfsdk:"size"`        // サイズ（GB）
 	CreatedAt   types.String `tfsdk:"created_at"`  // 作成日時
+	UpdatedAt   types.String `tfsdk:"updated_at"`  // 更新日時
 }
 
 func (r *volumeSnapshotResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -110,6 +111,13 @@ func (r *volumeSnapshotResource) Schema(_ context.Context, _ resource.SchemaRequ
 			},
 			"created_at": schema.StringAttribute{
 				MarkdownDescription: "The date and time the snapshot was created, in RFC 3339 format.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"updated_at": schema.StringAttribute{
+				MarkdownDescription: "The date and time the snapshot was last updated, in RFC 3339 format. Null until the API reports it.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -248,7 +256,7 @@ func (r *volumeSnapshotResource) ImportState(ctx context.Context, req resource.I
 }
 
 // API のスナップショットを State に写す.
-// 説明は省略可能なので、空であれば null のままにする.
+// 説明は省略可能なので、空であれば null のままにする. 更新日時は作成直後の応答に無い（null）ことがある.
 func setVolumeSnapshotState(m *volumeSnapshotResourceModel, s *snapshots.Snapshot) {
 	m.ID = types.StringValue(s.ID)
 	m.VolumeID = types.StringValue(s.VolumeID)
@@ -261,4 +269,9 @@ func setVolumeSnapshotState(m *volumeSnapshotResourceModel, s *snapshots.Snapsho
 	m.Status = types.StringValue(s.Status)
 	m.Size = types.Int64Value(int64(s.Size))
 	m.CreatedAt = types.StringValue(s.CreatedAt.UTC().Format(time.RFC3339))
+	if s.UpdatedAt.IsZero() {
+		m.UpdatedAt = types.StringNull()
+	} else {
+		m.UpdatedAt = types.StringValue(s.UpdatedAt.UTC().Format(time.RFC3339))
+	}
 }

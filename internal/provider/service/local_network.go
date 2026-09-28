@@ -1,12 +1,15 @@
 // ローカルネットワーク・サブネット・ポート・追加IP・ポートのアタッチと QoS ポリシーの API の呼び出しを提供する.
-// リクエストの本文は ConoHa のドキュメントに載っている項目だけを送るため、gophercloud の Opts を通さずに組み立てる.
+// リクエストの本文は ConoHa の OpenAPI 定義（gmo-internet/conoha_vps_openapi）に載っている項目だけを送るため、
+// gophercloud の Opts を通さずに組み立てる.
 
 package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -46,7 +49,7 @@ type SubnetCreateOpts struct {
 	CIDR      string `json:"cidr"`
 }
 
-// Port はポートのレスポンス.
+// Port はポートのレスポンス（PortRes・ListPortsRes の port）.
 type Port struct {
 	ID                  string            `json:"id"`
 	Name                string            `json:"name"`
@@ -57,7 +60,35 @@ type Port struct {
 	FixedIPs            []PortFixedIP     `json:"fixed_ips"`
 	SecurityGroups      []string          `json:"security_groups"`
 	AllowedAddressPairs []PortAddressPair `json:"allowed_address_pairs"`
-	QoSPolicyID         *string           `json:"qos_policy_id"`
+	// QoSPolicyID はポートに付けた QoS ポリシー. 付けていなければ null.
+	QoSPolicyID *string `json:"qos_policy_id"`
+	// QoSNetworkPolicyID はネットワークに付いた QoS ポリシー（ポートのものが無いときに効く）. 付いていなければ null.
+	QoSNetworkPolicyID *string `json:"qos_network_policy_id"`
+	// HasQoSPolicyID はレスポンスに qos_policy_id の項目があったか（null を含む）.
+	HasQoSPolicyID bool `json:"-"`
+}
+
+// UnmarshalJSON は、qos_policy_id が null なのか項目ごと無いのかを区別して読む.
+func (p *Port) UnmarshalJSON(b []byte) error {
+	type plain Port
+	var v struct {
+		plain
+		QoSPolicyID json.RawMessage `json:"qos_policy_id"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*p = Port(v.plain)
+	p.QoSPolicyID = nil
+	p.HasQoSPolicyID = v.QoSPolicyID != nil
+	if v.QoSPolicyID != nil && string(v.QoSPolicyID) != "null" {
+		var id string
+		if err := json.Unmarshal(v.QoSPolicyID, &id); err != nil {
+			return fmt.Errorf("qos_policy_id: %w", err)
+		}
+		p.QoSPolicyID = &id
+	}
+	return nil
 }
 
 // PortFixedIP はポートに割り当てる IP アドレス. ip_address を省くとサブネットから自動で割り当てられる.
@@ -66,10 +97,28 @@ type PortFixedIP struct {
 	IPAddress string `json:"ip_address,omitempty"`
 }
 
-// PortAddressPair は VIP として使うネットワークアドレス（CIDR 形式）.
+// PortAddressPair は VIP として使う IP アドレスまたはネットワークアドレス（CIDR 形式）.
+// リクエストは ip_address だけを送る（OpenAPI 定義のリクエストに mac_address は無い）.
 type PortAddressPair struct {
-	IPAddress  string `json:"ip_address"`
-	MACAddress string `json:"mac_address,omitempty"`
+	IPAddress string `json:"ip_address"`
+}
+
+// UnmarshalJSON は、オブジェクト（{"ip_address": ...}）と文字列のどちらの形でも読む.
+// OpenAPI 定義はレスポンスの要素を文字列と書くが、Neutron の実装はオブジェクトを返すため両方を受ける.
+func (a *PortAddressPair) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		a.IPAddress = s
+		return nil
+	}
+	var v struct {
+		IPAddress string `json:"ip_address"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	a.IPAddress = v.IPAddress
+	return nil
 }
 
 // PortCreateOpts はポート作成（ローカルネットワーク用）のリクエスト.
@@ -88,7 +137,7 @@ type PortUpdateOpts struct {
 	AllowedAddressPairs *[]PortAddressPair `json:"allowed_address_pairs,omitempty"`
 }
 
-// AllocateIPsOpts はポート作成（追加IP用）のリクエスト.
+// AllocateIPsOpts はポート作成（追加IP用）のリクエスト. OpenAPI 定義のリクエストは qos_policy_id を取らない.
 type AllocateIPsOpts struct {
 	Count          int      `json:"count"`
 	SecurityGroups []string `json:"security_groups,omitempty"`
@@ -102,6 +151,7 @@ type QoSPolicy struct {
 	Shared      bool            `json:"shared"`
 	IsDefault   bool            `json:"is_default"`
 	Rules       []QoSPolicyRule `json:"rules"`
+	Tags        []string        `json:"tags"`
 }
 
 // QoSPolicyRule は QoS ポリシーの帯域制限ルール.
@@ -135,6 +185,11 @@ func (c *ConohaClient) portAttachClient() (*gophercloud.ServiceClient, error) {
 
 // ネットワーク API に JSON を送り、レスポンスを out に読む.
 func (c *ConohaClient) localNetworkRequest(ctx context.Context, method, what string, body, out any, okCodes []int, path ...string) error {
+	return c.localNetworkRequestQuery(ctx, method, what, nil, body, out, okCodes, path...)
+}
+
+// localNetworkRequest の、クエリ文字列を付けるもの.
+func (c *ConohaClient) localNetworkRequestQuery(ctx context.Context, method, what string, query url.Values, body, out any, okCodes []int, path ...string) error {
 	client, err := c.localNetworkClient()
 	if err != nil {
 		return err
@@ -142,17 +197,20 @@ func (c *ConohaClient) localNetworkRequest(ctx context.Context, method, what str
 
 	tflog.Debug(ctx, "Sending network API request.", map[string]any{"method": method, "target": what})
 
-	url := client.ServiceURL(path...)
+	target := client.ServiceURL(path...)
+	if len(query) > 0 {
+		target += "?" + query.Encode()
+	}
 	opts := &gophercloud.RequestOpts{OkCodes: okCodes}
 	switch method {
 	case "POST":
-		_, err = client.Post(ctx, url, body, out, opts)
+		_, err = client.Post(ctx, target, body, out, opts)
 	case "PUT":
-		_, err = client.Put(ctx, url, body, out, opts)
+		_, err = client.Put(ctx, target, body, out, opts)
 	case "GET":
-		_, err = client.Get(ctx, url, out, opts)
+		_, err = client.Get(ctx, target, out, opts)
 	case "DELETE":
-		_, err = client.Delete(ctx, url, opts)
+		_, err = client.Delete(ctx, target, opts)
 	default:
 		err = fmt.Errorf("unsupported method %s", method)
 	}
@@ -185,7 +243,7 @@ func (c *ConohaClient) GetNetwork(ctx context.Context, id string) (*Network, err
 	return &out.Network, nil
 }
 
-// DeleteNetwork ネットワークを削除.
+// DeleteNetwork ネットワークを削除. サブネットやポートが残っていると削除できない.
 func (c *ConohaClient) DeleteNetwork(ctx context.Context, id string) error {
 	return c.localNetworkRequest(ctx, "DELETE", "delete network", nil, nil, []int{204}, "networks", id)
 }
@@ -270,18 +328,33 @@ func (c *ConohaClient) DeletePort(ctx context.Context, id string) error {
 	return c.localNetworkRequest(ctx, "DELETE", "delete port", nil, nil, []int{204}, "ports", id)
 }
 
-// ListQoSPolicies QoS ポリシーの一覧を取得.
-func (c *ConohaClient) ListQoSPolicies(ctx context.Context) ([]QoSPolicy, error) {
+// ListQoSPolicies QoS ポリシーの一覧を取得. name が空でなければ、その名前で絞る（クエリの name）.
+func (c *ConohaClient) ListQoSPolicies(ctx context.Context, name string) ([]QoSPolicy, error) {
 	var out struct {
 		Policies []QoSPolicy `json:"policies"`
 	}
-	if err := c.localNetworkRequest(ctx, "GET", "list QoS policies", nil, &out, []int{200}, "qos", "policies"); err != nil {
+	var query url.Values
+	if name != "" {
+		query = url.Values{"name": {name}}
+	}
+	if err := c.localNetworkRequestQuery(ctx, "GET", "list QoS policies", query, nil, &out, []int{200}, "qos", "policies"); err != nil {
 		return nil, err
 	}
 	return out.Policies, nil
 }
 
-// AttachPort ポートをサーバーにアタッチ.
+// GetQoSPolicy QoS ポリシーの詳細を取得.
+func (c *ConohaClient) GetQoSPolicy(ctx context.Context, id string) (*QoSPolicy, error) {
+	var out struct {
+		Policy QoSPolicy `json:"policy"`
+	}
+	if err := c.localNetworkRequest(ctx, "GET", "retrieve QoS policy", nil, &out, []int{200}, "qos", "policies", id); err != nil {
+		return nil, err
+	}
+	return &out.Policy, nil
+}
+
+// AttachPort ポートをサーバーにアタッチ. アタッチは同期（200）で、レスポンスの時点で付いている.
 func (c *ConohaClient) AttachPort(ctx context.Context, serverID, portID string) (*attachinterfaces.Interface, error) {
 	client, err := c.portAttachClient()
 	if err != nil {

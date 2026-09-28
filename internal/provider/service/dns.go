@@ -6,6 +6,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -18,54 +19,123 @@ import (
 const dnsListPageSize = 100
 
 // DNSDomain は DNS に登録したドメイン.
+// ID は OpenAPI 仕様では "id"、公開 API の HTML ドキュメントでは "uuid" で返るため、両方を読む.
 type DNSDomain struct {
-	ID        string `json:"uuid"`
-	Name      string `json:"name"`
-	ProjectID string `json:"project_id"`
-	Serial    int64  `json:"serial"`
-	TTL       int64  `json:"ttl"`
-	Email     string `json:"email"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ProjectID   string `json:"project_id"`
+	Serial      int64  `json:"serial"`
+	TTL         int64  `json:"ttl"`
+	Email       string `json:"email"`
+	Description string `json:"description"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
-// DNSDomainCreateOpts はドメイン情報登録のリクエスト本文.
+// UnmarshalJSON は "id" が無ければ "uuid" を ID として読む.
+func (d *DNSDomain) UnmarshalJSON(b []byte) error {
+	type plain DNSDomain
+	var v struct {
+		plain
+		UUID string `json:"uuid"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*d = DNSDomain(v.plain)
+	if d.ID == "" {
+		d.ID = v.UUID
+	}
+	return nil
+}
+
+// DNSDomainCreateOpts はドメイン作成のリクエスト本文.
 type DNSDomainCreateOpts struct {
-	Name  string `json:"name"`
-	TTL   int64  `json:"ttl"`
-	Email string `json:"email"`
+	Name        string `json:"name"`
+	TTL         int64  `json:"ttl"`
+	Email       string `json:"email"`
+	Description string `json:"description,omitempty"`
 }
 
-// DNSDomainUpdateOpts はドメイン情報更新のリクエスト本文.
+// DNSDomainUpdateOpts はドメイン更新のリクエスト本文.
+// Description は nil なら送らず、空文字なら説明を消す.
 type DNSDomainUpdateOpts struct {
-	TTL   int64  `json:"ttl"`
-	Email string `json:"email"`
+	TTL         int64   `json:"ttl"`
+	Email       string  `json:"email"`
+	Description *string `json:"description,omitempty"`
 }
 
 // DNSRecord はドメインに設定した DNS レコード.
+// ID とドメイン ID は OpenAPI 仕様では "id"・"domain_id"、HTML ドキュメントでは "uuid"・"domain_uuid" で返るため、両方を読む.
+// weight・port は OpenAPI 仕様に無く HTML ドキュメントにだけある（SRV に要る）.
 type DNSRecord struct {
-	ID        string `json:"uuid"`
-	DomainID  string `json:"domain_uuid"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Data      string `json:"data"`
-	Priority  *int64 `json:"priority"`
-	Weight    *int64 `json:"weight"`
-	Port      *int64 `json:"port"`
-	TTL       *int64 `json:"ttl"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          string `json:"id"`
+	DomainID    string `json:"domain_id"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Data        string `json:"data"`
+	Priority    *int64 `json:"priority"`
+	Weight      *int64 `json:"weight"`
+	Port        *int64 `json:"port"`
+	TTL         *int64 `json:"ttl"`
+	Description string `json:"description"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// UnmarshalJSON は "id"・"domain_id" が無ければ "uuid"・"domain_uuid" を読む.
+func (r *DNSRecord) UnmarshalJSON(b []byte) error {
+	type plain DNSRecord
+	var v struct {
+		plain
+		UUID       string `json:"uuid"`
+		DomainUUID string `json:"domain_uuid"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*r = DNSRecord(v.plain)
+	if r.ID == "" {
+		r.ID = v.UUID
+	}
+	if r.DomainID == "" {
+		r.DomainID = v.DomainUUID
+	}
+	return nil
 }
 
 // DNSRecordOpts はレコード作成・更新のリクエスト本文.
-// priority・weight・port は MX や SRV のときだけ送る.
+// priority・weight・port・ttl は値があるときだけ送り、Null に挙げたものは値が無ければ null を送って消す.
+// Description は nil なら送らず、空文字なら説明を消す.
 type DNSRecordOpts struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Data     string `json:"data"`
-	Priority *int64 `json:"priority,omitempty"`
-	Weight   *int64 `json:"weight,omitempty"`
-	Port     *int64 `json:"port,omitempty"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Data        string   `json:"data"`
+	Priority    *int64   `json:"priority,omitempty"`
+	Weight      *int64   `json:"weight,omitempty"`
+	Port        *int64   `json:"port,omitempty"`
+	TTL         *int64   `json:"ttl,omitempty"`
+	Description *string  `json:"description,omitempty"`
+	Null        []string `json:"-"`
+}
+
+// MarshalJSON は Null に挙げたフィールドのうち値の無いものを null で送る.
+func (o DNSRecordOpts) MarshalJSON() ([]byte, error) {
+	type plain DNSRecordOpts
+	b, err := json.Marshal(plain(o))
+	if err != nil || len(o.Null) == 0 {
+		return b, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	for _, k := range o.Null {
+		if _, ok := m[k]; !ok {
+			m[k] = nil
+		}
+	}
+	return json.Marshal(m)
 }
 
 // DNS のクライアントを返す. カタログに DNS が無ければエラーを返す.
@@ -135,13 +205,13 @@ func (c *ConohaClient) ListDNSDomains(ctx context.Context) ([]DNSDomain, error) 
 			return nil, fmt.Errorf("failed to list DNS domains: %w", err)
 		}
 		all = append(all, page.Domains...)
-		if len(page.Domains) == 0 || len(all) >= page.TotalCount {
+		if dnsLastPage(len(page.Domains), len(all), page.TotalCount) {
 			return all, nil
 		}
 	}
 }
 
-// UpdateDNSDomain はドメインの TTL と連絡先メールアドレスを更新する.
+// UpdateDNSDomain はドメインの TTL・連絡先メールアドレス・説明を更新する.
 func (c *ConohaClient) UpdateDNSDomain(ctx context.Context, domainID string, opts DNSDomainUpdateOpts) (*DNSDomain, error) {
 	client, err := c.dnsClient()
 	if err != nil {
@@ -236,7 +306,7 @@ func (c *ConohaClient) ListDNSRecords(ctx context.Context, domainID string) ([]D
 			return nil, fmt.Errorf("failed to list DNS records: %w", err)
 		}
 		all = append(all, page.Records...)
-		if len(page.Records) == 0 || len(all) >= page.TotalCount {
+		if dnsLastPage(len(page.Records), len(all), page.TotalCount) {
 			return all, nil
 		}
 	}
@@ -276,6 +346,14 @@ func (c *ConohaClient) DeleteDNSRecord(ctx context.Context, domainID, recordID s
 		return fmt.Errorf("failed to delete DNS record: %w", err)
 	}
 	return nil
+}
+
+// 一覧が最後のページまで来たか.
+// limit・offset・total_count は HTML ドキュメントにだけあり OpenAPI 仕様には無いため、
+// total_count が無ければ（0 になる）最初のページで終える. サーバーが limit より少なく返すことがあるため、
+// ページの件数では終わりを判断しない.
+func dnsLastPage(pageLen, got, total int) bool {
+	return pageLen == 0 || got >= total
 }
 
 // 一覧取得の URL に件数と開始位置を付ける（offset は limit と併せて使う）.

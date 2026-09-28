@@ -1,5 +1,5 @@
 // ロードバランサー（LBaaS）の API の呼び出しを提供する.
-// リクエストの本文はドキュメント（Load Balancer API）に載っている項目だけを送るため、
+// リクエストの本文は GMO の OpenAPI 仕様（conoha_vps_openapi）の要求スキーマに載っている項目だけを送るため、
 // gophercloud の loadbalancer パッケージは使わず、カタログのエンドポイントへ直接リクエストする.
 //
 // ロードバランサー配下（リスナー・プール・メンバー・ヘルスモニタ）の変更は、ロードバランサーの
@@ -49,7 +49,7 @@ type LoadBalancer struct {
 	VipNetworkID string `json:"vip_network_id"`
 }
 
-// LBListener はリスナー.
+// LBListener はリスナー. connection_limit の -1 は無制限を表す.
 type LBListener struct {
 	LBStatus
 	ID              string  `json:"id"`
@@ -58,6 +58,7 @@ type LBListener struct {
 	ProtocolPort    int     `json:"protocol_port"`
 	ConnectionLimit int     `json:"connection_limit"`
 	DefaultPoolID   *string `json:"default_pool_id"`
+	AdminStateUp    bool    `json:"admin_state_up"`
 	LoadBalancers   []LBRef `json:"loadbalancers"`
 }
 
@@ -67,15 +68,16 @@ func (l *LBListener) LoadBalancerID() string {
 }
 
 // LBPool はプール.
+// 応答の members は、仕様では ID の文字列の配列、OpenStack では {"id": ...} の配列と形が定まらないため読まない.
 type LBPool struct {
 	LBStatus
 	ID            string  `json:"id"`
 	Name          string  `json:"name"`
 	Protocol      string  `json:"protocol"`
 	LBAlgorithm   string  `json:"lb_algorithm"`
+	AdminStateUp  bool    `json:"admin_state_up"`
 	LoadBalancers []LBRef `json:"loadbalancers"`
 	Listeners     []LBRef `json:"listeners"`
-	Members       []LBRef `json:"members"`
 }
 
 // LoadBalancerID はプールが紐づくロードバランサーの ID を返す.
@@ -165,12 +167,13 @@ type CreateMemberOpts struct {
 }
 
 // UpdateMemberOpts はメンバー更新のリクエスト.
+// 仕様の要求スキーマは admin_state_up を string と書くが、例・説明・応答はいずれも真偽値なので真偽値で送る.
 type UpdateMemberOpts struct {
 	AdminStateUp bool `json:"admin_state_up"`
 }
 
 // CreateHealthMonitorOpts はヘルスモニタ作成のリクエスト.
-// url_path と expected_codes は HTTP・HTTPS のときだけ送る.
+// url_path と expected_codes は省略でき、HTTP・HTTPS で指定されたときだけ送る.
 type CreateHealthMonitorOpts struct {
 	Name          string `json:"name"`
 	PoolID        string `json:"pool_id"`
@@ -711,14 +714,14 @@ func lbGet[T any](ctx context.Context, c *ConohaClient, key string, parts ...str
 	return unwrap(out, key)
 }
 
-// PUT し、応答の key の中身を返す. 成功は 200.
+// PUT し、応答の key の中身を返す. 仕様の成功は 202 だが、OpenStack（Octavia）の 200 も成功とする.
 func lbUpdate[T any](ctx context.Context, c *ConohaClient, key string, body any, parts ...string) (*T, error) {
 	sc, err := c.lbClient()
 	if err != nil {
 		return nil, err
 	}
 	var out map[string]T
-	if _, err := sc.Put(ctx, lbURL(sc, parts...), map[string]any{key: body}, &out, &gophercloud.RequestOpts{OkCodes: []int{200}}); err != nil {
+	if _, err := sc.Put(ctx, lbURL(sc, parts...), map[string]any{key: body}, &out, &gophercloud.RequestOpts{OkCodes: []int{200, 202}}); err != nil {
 		tflog.Error(ctx, "LBaaS update request failed.", map[string]any{"path": strings.Join(parts, "/"), "error": err.Error()})
 		return nil, err
 	}

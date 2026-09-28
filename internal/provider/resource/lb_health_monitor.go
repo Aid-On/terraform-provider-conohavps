@@ -26,6 +26,7 @@ var (
 	_ resource.ResourceWithConfigure      = &lbHealthMonitorResource{}
 	_ resource.ResourceWithImportState    = &lbHealthMonitorResource{}
 	_ resource.ResourceWithValidateConfig = &lbHealthMonitorResource{}
+	_ resource.ResourceWithModifyPlan     = &lbHealthMonitorResource{}
 )
 
 func NewLBHealthMonitorResource() resource.Resource {
@@ -47,6 +48,7 @@ type lbHealthMonitorResourceModel struct {
 	MaxRetries      types.Int64  `tfsdk:"max_retries"`
 	URLPath         types.String `tfsdk:"url_path"`
 	ExpectedCodes   types.String `tfsdk:"expected_codes"`
+	AdminStateUp    types.Bool   `tfsdk:"admin_state_up"`
 	OperatingStatus types.String `tfsdk:"operating_status"`
 }
 
@@ -55,9 +57,12 @@ func (r *lbHealthMonitorResource) Metadata(_ context.Context, req resource.Metad
 }
 
 func (r *lbHealthMonitorResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
-	// ドキュメントの更新 API はヘルスモニタ名しか変えられないため、それ以外は作り直す
+	// 仕様の更新 API（UpdateHealthmonitorReq）はヘルスモニタ名しか変えられないため、それ以外は作り直す
 	replaceString := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	replaceInt64 := []planmodifier.Int64{int64planmodifier.RequiresReplace()}
+	// 省くと HTTP・HTTPS では API の既定値が入るため、設定が無ければ state の値を引き継ぐ.
+	// 作り直しや HTTP・HTTPS 以外への変更での扱いは ModifyPlan で決める
+	httpOnly := []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a health monitor of a load balancer pool, which checks whether the members are alive. " +
 			"Changes wait until the health monitor and its load balancer become `ACTIVE`.",
@@ -82,12 +87,12 @@ func (r *lbHealthMonitorResource) Schema(_ context.Context, _ resource.SchemaReq
 				},
 			},
 			"type": schema.StringAttribute{
-				MarkdownDescription: "The protocol used for the health check. Allowed values: `TCP`, `UDP`, `PING`, `HTTP`, `HTTPS`. " +
+				MarkdownDescription: "The protocol used for the health check. Allowed values: `TCP`, `UDP-CONNECT`, `PING`, `HTTP`, `HTTPS`. " +
 					"`HTTP` and `HTTPS` put load on the members, so `TCP` or `PING` is recommended for few or small members. " +
 					"Changing this creates a new health monitor.",
 				Required: true,
 				Validators: []validator.String{
-					stringvalidator.OneOf("TCP", "UDP", "PING", "HTTP", "HTTPS"),
+					stringvalidator.OneOf("TCP", "UDP-CONNECT", "PING", "HTTP", "HTTPS"),
 				},
 				PlanModifiers: replaceString,
 			},
@@ -113,16 +118,20 @@ func (r *lbHealthMonitorResource) Schema(_ context.Context, _ resource.SchemaReq
 				PlanModifiers:       replaceInt64,
 			},
 			"url_path": schema.StringAttribute{
-				MarkdownDescription: "The path to request. Required when `type` is `HTTP` or `HTTPS`, and not allowed otherwise. Changing this creates a new health monitor.",
-				Optional:            true,
-				PlanModifiers:       replaceString,
+				MarkdownDescription: "The path to request. Only allowed when `type` is `HTTP` or `HTTPS`; when omitted, the API's default is used. " +
+					"`null` for other types. Changing this creates a new health monitor.",
+				Optional:      true,
+				Computed:      true,
+				PlanModifiers: httpOnly,
 			},
 			"expected_codes": schema.StringAttribute{
-				MarkdownDescription: "The HTTP status code(s) expected in the response. Required when `type` is `HTTP` or `HTTPS`, and not allowed otherwise. " +
-					"Changing this creates a new health monitor.",
+				MarkdownDescription: "The HTTP status code(s) expected in the response. Only allowed when `type` is `HTTP` or `HTTPS`; when omitted, the API's default is used. " +
+					"`null` for other types. Changing this creates a new health monitor.",
 				Optional:      true,
-				PlanModifiers: replaceString,
+				Computed:      true,
+				PlanModifiers: httpOnly,
 			},
+			"admin_state_up": lbReadOnlyAdminStateUp("health monitor"),
 			"operating_status": schema.StringAttribute{
 				MarkdownDescription: "The operating status of the health monitor.",
 				Computed:            true,
@@ -131,7 +140,8 @@ func (r *lbHealthMonitorResource) Schema(_ context.Context, _ resource.SchemaReq
 	}
 }
 
-// 項目をまたぐ制約（timeout は delay より短い、HTTP・HTTPS のときだけ url_path と expected_codes を指定する）を確かめる.
+// 項目をまたぐ制約（timeout は delay より短い、url_path と expected_codes は HTTP・HTTPS のときだけ指定できる）を確かめる.
+// 仕様の作成の要求で url_path と expected_codes は必須ではないため、HTTP・HTTPS でも省略を認める.
 func (r *lbHealthMonitorResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var cfg lbHealthMonitorResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
@@ -151,17 +161,64 @@ func (r *lbHealthMonitorResource) ValidateConfig(ctx context.Context, req resour
 		return
 	}
 	typ := cfg.Type.ValueString()
-	isHTTP := typ == "HTTP" || typ == "HTTPS"
+	if lbIsHTTPMonitor(typ) {
+		return
+	}
 	for name, v := range map[string]types.String{"url_path": cfg.URLPath, "expected_codes": cfg.ExpectedCodes} {
-		switch {
-		case isHTTP && v.IsNull():
-			resp.Diagnostics.AddAttributeError(path.Root(name), "Missing required attribute",
-				fmt.Sprintf("%s is required when type is %s.", name, typ))
-		case !isHTTP && lbKnown(v):
+		if lbKnown(v) {
 			resp.Diagnostics.AddAttributeError(path.Root(name), "Invalid attribute combination",
 				fmt.Sprintf("%s can only be set when type is HTTP or HTTPS, got type %s.", name, typ))
 		}
 	}
+}
+
+// url_path と expected_codes の plan を決める.
+// HTTP・HTTPS 以外では API が null を返すので null にする. 作り直すときは、設定の無い項目に
+// state の値ではなく新しいヘルスモニタに API が入れる既定値が入るので、未確定にする.
+func (r *lbHealthMonitorResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	var plan, config lbHealthMonitorResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() || !lbKnown(plan.Type) {
+		return
+	}
+
+	urlPath, expectedCodes := plan.URLPath, plan.ExpectedCodes
+	switch {
+	case !lbIsHTTPMonitor(plan.Type.ValueString()):
+		urlPath, expectedCodes = types.StringNull(), types.StringNull()
+	case !req.State.Raw.IsNull():
+		var state lbHealthMonitorResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() || !plan.replaces(state) {
+			return
+		}
+		if config.URLPath.IsNull() {
+			urlPath = types.StringUnknown()
+		}
+		if config.ExpectedCodes.IsNull() {
+			expectedCodes = types.StringUnknown()
+		}
+	default:
+		return
+	}
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("url_path"), urlPath)...)
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("expected_codes"), expectedCodes)...)
+}
+
+// plan が state のヘルスモニタの作り直しになるか. 名前以外の項目はどれも作り直しになる.
+func (m lbHealthMonitorResourceModel) replaces(state lbHealthMonitorResourceModel) bool {
+	return !m.PoolID.Equal(state.PoolID) || !m.Type.Equal(state.Type) || !m.Delay.Equal(state.Delay) ||
+		!m.Timeout.Equal(state.Timeout) || !m.MaxRetries.Equal(state.MaxRetries) ||
+		!m.URLPath.Equal(state.URLPath) || !m.ExpectedCodes.Equal(state.ExpectedCodes)
+}
+
+// url_path と expected_codes を使うヘルスモニタの type か.
+func lbIsHTTPMonitor(typ string) bool {
+	return typ == "HTTP" || typ == "HTTPS"
 }
 
 func (r *lbHealthMonitorResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -182,7 +239,7 @@ func (r *lbHealthMonitorResource) Create(ctx context.Context, req resource.Creat
 		MaxRetries:    int(plan.MaxRetries.ValueInt64()),
 		Timeout:       int(plan.Timeout.ValueInt64()),
 		Type:          plan.Type.ValueString(),
-		URLPath:       plan.URLPath.ValueString(),
+		URLPath:       plan.URLPath.ValueString(), // 省略（未確定）なら空文字列になり、送らない
 		ExpectedCodes: plan.ExpectedCodes.ValueString(),
 	}
 
@@ -290,7 +347,7 @@ func (r *lbHealthMonitorResource) ImportState(ctx context.Context, req resource.
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-// API の応答をモデルに写す. TCP・PING では url_path と expected_codes が null で返るので null のままにする.
+// API の応答をモデルに写す. HTTP・HTTPS 以外では url_path と expected_codes が null で返るので null のままにする.
 func (m *lbHealthMonitorResourceModel) fill(hm *service.LBHealthMonitor) {
 	m.ID = types.StringValue(hm.ID)
 	if id := hm.PoolID(); id != "" {
@@ -303,6 +360,7 @@ func (m *lbHealthMonitorResourceModel) fill(hm *service.LBHealthMonitor) {
 	m.MaxRetries = types.Int64Value(int64(hm.MaxRetries))
 	m.URLPath = lbNullableString(hm.URLPath)
 	m.ExpectedCodes = lbNullableString(hm.ExpectedCodes)
+	m.AdminStateUp = types.BoolValue(hm.AdminStateUp)
 	m.OperatingStatus = types.StringValue(hm.OperatingStatus)
 }
 

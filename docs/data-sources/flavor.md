@@ -38,6 +38,7 @@ resource "conohavps_instance" "example" {
 ### Read-Only
 
 - `disk` (Number) The disk in GB the flavor defines.
+- `extra_specs` (Map of String) The extra specs of the flavor, such as `specialized_kusanagi`. Empty when the flavor has none.
 - `id` (String) The UUID of the flavor.
 - `ram` (Number) The memory in MB.
 - `vcpus` (Number) The number of CPU cores.

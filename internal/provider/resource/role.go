@@ -220,7 +220,7 @@ func (r *roleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 
 	if err := r.client.DeleteRole(ctx, data.ID.ValueString()); err != nil && !gophercloud.ResponseCodeIs(err, 404) {
 		resp.Diagnostics.AddError("Failed to delete role resource",
-			"An unexpected error occurred while attempting to delete role resource. A role granted to a sub-user cannot be deleted.\n\nError: "+err.Error())
+			"An unexpected error occurred while attempting to delete role resource. A role cannot be deleted while it is the only role of a sub-user.\n\nError: "+err.Error())
 		return
 	}
 
