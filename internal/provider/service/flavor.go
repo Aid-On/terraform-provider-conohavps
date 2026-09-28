@@ -10,7 +10,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// ListFlavors フレーバーの一覧を取得.
+// ListFlavors フレーバーの詳細一覧を取得.
+// API 仕様の詳細一覧取得にはクエリパラメータが無いため、is_public などの絞り込みは付けない.
 func (c *ConohaClient) ListFlavors(ctx context.Context) ([]flavors.Flavor, error) {
 	if c.ComputeClient == nil {
 		return nil, fmt.Errorf("compute client is not initialized")
@@ -22,7 +23,7 @@ func (c *ConohaClient) ListFlavors(ctx context.Context) ([]flavors.Flavor, error
 
 	tflog.Debug(ctx, "Listing flavors.", map[string]any{})
 
-	pages, err := flavors.ListDetail(c.ComputeClient, flavors.ListOpts{AccessType: flavors.AllAccess}).AllPages(ctx)
+	pages, err := flavors.ListDetail(c.ComputeClient, nil).AllPages(ctx)
 	if err != nil {
 		tflog.Error(ctx, "Flavor listing error.", map[string]any{"error": err.Error()})
 		return nil, fmt.Errorf("failed to list flavors: %w", err)

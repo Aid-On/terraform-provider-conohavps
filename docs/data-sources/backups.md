@@ -2,12 +2,15 @@
 page_title: "conohavps_backups Data Source - terraform-provider-conohavps"
 subcategory: "Volume"
 description: |-
-  Lists the backups taken by auto-backup, newest first. Use a backup's id as backup_id of conohavps_volume to restore it.
+  Lists the backups taken by auto-backup, newest first. Use a backup's id as backup_id of conohavps_volume to restore it. Backups remain after auto-backup is cancelled, so they are listed after conohavps_instance_autobackup is destroyed.
+  instance_id and is_boot_volume are read from the backup's metadata (instance_uuid, is_boot_volume), which the API returns but the API specification does not define; when a backup has no such metadata, instance_id is empty and is_boot_volume is false.
 ---
 
 # conohavps_backups (Data Source)
 
-Lists the backups taken by auto-backup, newest first. Use a backup's `id` as `backup_id` of `conohavps_volume` to restore it.
+Lists the backups taken by auto-backup, newest first. Use a backup's `id` as `backup_id` of `conohavps_volume` to restore it. Backups remain after auto-backup is cancelled, so they are listed after `conohavps_instance_autobackup` is destroyed.
+
+`instance_id` and `is_boot_volume` are read from the backup's metadata (`instance_uuid`, `is_boot_volume`), which the API returns but the API specification does not define; when a backup has no such metadata, `instance_id` is empty and `is_boot_volume` is false.
 
 ## Example Usage
 
@@ -30,7 +33,7 @@ resource "conohavps_volume" "restored" {
 
 ### Optional
 
-- `instance_id` (String) Only list the backups of this server.
+- `instance_id` (String) Only list the backups of this server (matched against the backup's `instance_uuid` metadata).
 - `volume_id` (String) Only list the backups of this volume.
 
 ### Read-Only
@@ -44,10 +47,13 @@ Read-Only:
 
 - `created_at` (String) The date and time the backup was created.
 - `data_timestamp` (String) The date and time of the backed up data.
+- `has_dependent_backups` (Boolean) Whether other backups depend on this backup.
 - `id` (String) Backup ID.
 - `instance_id` (String) The ID of the server the volume was attached to.
 - `is_boot_volume` (Boolean) Whether the backed up volume is a boot storage volume.
+- `is_incremental` (Boolean) Whether the backup is incremental.
 - `name` (String) Backup name.
 - `size` (Number) Backup size in GB.
 - `status` (String) Backup status.
+- `updated_at` (String) The date and time the backup was last updated.
 - `volume_id` (String) The ID of the backed up volume.

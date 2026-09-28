@@ -31,15 +31,18 @@ type backupsDataSourceModel struct {
 }
 
 type backupModel struct {
-	ID            types.String `tfsdk:"id"`             // バックアップ ID
-	Name          types.String `tfsdk:"name"`           // バックアップ名
-	Status        types.String `tfsdk:"status"`         // ステータス
-	Size          types.Int64  `tfsdk:"size"`           // サイズ（GB）
-	VolumeID      types.String `tfsdk:"volume_id"`      // バックアップ元のボリューム ID
-	InstanceID    types.String `tfsdk:"instance_id"`    // バックアップ元のサーバー ID
-	IsBootVolume  types.Bool   `tfsdk:"is_boot_volume"` // ブートストレージのバックアップか
-	CreatedAt     types.String `tfsdk:"created_at"`     // 作成日時
-	DataTimestamp types.String `tfsdk:"data_timestamp"` // データの取得日時
+	ID            types.String `tfsdk:"id"`                    // バックアップ ID
+	Name          types.String `tfsdk:"name"`                  // バックアップ名
+	Status        types.String `tfsdk:"status"`                // ステータス
+	Size          types.Int64  `tfsdk:"size"`                  // サイズ（GB）
+	VolumeID      types.String `tfsdk:"volume_id"`             // バックアップ元のボリューム ID
+	InstanceID    types.String `tfsdk:"instance_id"`           // バックアップ元のサーバー ID
+	IsBootVolume  types.Bool   `tfsdk:"is_boot_volume"`        // ブートストレージのバックアップか
+	CreatedAt     types.String `tfsdk:"created_at"`            // 作成日時
+	UpdatedAt     types.String `tfsdk:"updated_at"`            // 更新日時
+	DataTimestamp types.String `tfsdk:"data_timestamp"`        // データの取得日時
+	IsIncremental types.Bool   `tfsdk:"is_incremental"`        // 増分バックアップか
+	HasDependents types.Bool   `tfsdk:"has_dependent_backups"` // 依存するバックアップがあるか
 }
 
 func (d *backupsDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -48,10 +51,13 @@ func (d *backupsDataSource) Metadata(_ context.Context, req datasource.MetadataR
 
 func (d *backupsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Lists the backups taken by auto-backup, newest first. Use a backup's `id` as `backup_id` of `conohavps_volume` to restore it.",
+		MarkdownDescription: "Lists the backups taken by auto-backup, newest first. Use a backup's `id` as `backup_id` of `conohavps_volume` to restore it. " +
+			"Backups remain after auto-backup is cancelled, so they are listed after `conohavps_instance_autobackup` is destroyed.\n\n" +
+			"`instance_id` and `is_boot_volume` are read from the backup's metadata (`instance_uuid`, `is_boot_volume`), which the API returns " +
+			"but the API specification does not define; when a backup has no such metadata, `instance_id` is empty and `is_boot_volume` is false.",
 		Attributes: map[string]schema.Attribute{
 			"instance_id": schema.StringAttribute{
-				MarkdownDescription: "Only list the backups of this server.",
+				MarkdownDescription: "Only list the backups of this server (matched against the backup's `instance_uuid` metadata).",
 				Optional:            true,
 			},
 			"volume_id": schema.StringAttribute{
@@ -71,7 +77,13 @@ func (d *backupsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest
 						"instance_id":    schema.StringAttribute{MarkdownDescription: "The ID of the server the volume was attached to.", Computed: true},
 						"is_boot_volume": schema.BoolAttribute{MarkdownDescription: "Whether the backed up volume is a boot storage volume.", Computed: true},
 						"created_at":     schema.StringAttribute{MarkdownDescription: "The date and time the backup was created.", Computed: true},
+						"updated_at":     schema.StringAttribute{MarkdownDescription: "The date and time the backup was last updated.", Computed: true},
 						"data_timestamp": schema.StringAttribute{MarkdownDescription: "The date and time of the backed up data.", Computed: true},
+						"is_incremental": schema.BoolAttribute{MarkdownDescription: "Whether the backup is incremental.", Computed: true},
+						"has_dependent_backups": schema.BoolAttribute{
+							MarkdownDescription: "Whether other backups depend on this backup.",
+							Computed:            true,
+						},
 					},
 				},
 			},
@@ -129,7 +141,10 @@ func filterBackups(list []service.Backup, instanceID, volumeID string) []backupM
 			InstanceID:    types.StringValue(b.Metadata["instance_uuid"]),
 			IsBootVolume:  types.BoolValue(strings.EqualFold(b.Metadata["is_boot_volume"], "true")),
 			CreatedAt:     types.StringValue(b.CreatedAt),
+			UpdatedAt:     types.StringValue(b.UpdatedAt),
 			DataTimestamp: types.StringValue(b.DataTimestamp),
+			IsIncremental: types.BoolValue(b.IsIncremental),
+			HasDependents: types.BoolValue(b.HasDependentBackups),
 		})
 	}
 	return backups

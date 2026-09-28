@@ -51,6 +51,7 @@ func (r *volumeAttachmentResource) Schema(_ context.Context, _ resource.SchemaRe
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Attaches an additional storage volume to a server. " +
 			"The server must be stopped when the volume is attached and detached, and only one additional storage volume can be attached to a server. " +
+			"A volume that is still being processed cannot be attached until the processing finishes. " +
 			"A boot storage volume cannot be detached.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
