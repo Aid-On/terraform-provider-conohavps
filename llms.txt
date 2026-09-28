@@ -1,50 +1,119 @@
 # Terraform ConoHa VPS Provider（Aid-On fork）
 
-> GMO インターネットの `gmo-internet/terraform-provider-conohavps`（ベータ）を Aid-On が fork し、ConoHa VPS Ver.3.0 の公開 API が提供する全リソースとデータソースを足したプロバイダ。Terraform Registry には出しておらず、手元でビルドして `dev_overrides` で使う。追加分は GMO の公式提供ではない。
+> GMO インターネットの Terraform プロバイダ `gmo-internet/conohavps`（ベータ。Terraform Registry の community 階層、v0.1.0）を Aid-On が fork し、ConoHa VPS Ver.3.0 の公開 API が提供する全リソース（26 種）とデータソース（7 種）を足したもの。Registry には出しておらず、手元でビルドして `dev_overrides` で使う。追加分は GMO の公式提供ではない。
 
-- リポジトリ: https://github.com/Aid-On/terraform-provider-conohavps
-- 元のプロバイダ: https://github.com/gmo-internet/terraform-provider-conohavps（Registry: community 階層、v0.1.0）
-- ConoHa VPS の API 文書: https://doc.conoha.jp/reference/api-vps3/
-- 変更点: CHANGELOG.md
+このファイルは LLM とエージェント向けの入口。各リソースの属性は下の「ドキュメント」のリンク先（GitHub 上の Markdown）を読む。料金は 2026-09-28 に ConoHa の料金ページと仕様書から写した税込み価格で、`go run ./tools/llmsprices` を実行すると、ここに書いた金額が今も ConoHa のページに載っているかを確かめられる。
 
-## リソースとデータソース
+## セットアップ
 
-| 分類 | リソース（型名） | データソース |
-| --- | --- | --- |
-| サーバー | `conohavps_instance`、`conohavps_keypair`、`conohavps_port_attachment`、`conohavps_instance_autobackup` | `conohavps_flavor`（プラン名 → ID）、`conohavps_image`（イメージ名 → ID） |
-| ボリューム | `conohavps_volume`、`conohavps_volume_attachment`、`conohavps_volume_snapshot` | `conohavps_backups` |
-| ネットワーク | `conohavps_securitygroup`、`conohavps_securitygroup_rule`、`conohavps_network`、`conohavps_subnet`、`conohavps_port`、`conohavps_additional_ip` | `conohavps_qos_policy`（ポリシー名 → ID） |
-| ロードバランサー | `conohavps_lb_loadbalancer`、`conohavps_lb_listener`、`conohavps_lb_pool`、`conohavps_lb_member`、`conohavps_lb_health_monitor` | |
-| DNS | `conohavps_dns_domain`、`conohavps_dns_record` | `conohavps_dns_domain` |
-| オブジェクトストレージ | `conohavps_objectstorage_container`、`conohavps_objectstorage_quota` | |
-| イメージ | `conohavps_image_quota` | `conohavps_image_usage` |
-| アイデンティティ | `conohavps_role`、`conohavps_subuser`、`conohavps_credential` | `conohavps_permissions` |
+- 認証は ConoHa の公開 API ユーザー（テナント ID・ユーザー ID・パスワード）。`provider` ブロックの `tenant_id` `user_id` `password` か、環境変数 `CONOHAVPS_TENANT_ID` `CONOHAVPS_USER_ID` `CONOHAVPS_PASSWORD` で渡す（両方あれば環境変数が使われる）。`region` の既定は `c3j1`、`identity_endpoint` の既定は `https://identity.c3j1.conoha.io/v3`。
+- fork は Registry に無いので `go install .` でビルドし、`~/.terraformrc` の `dev_overrides` で `registry.terraform.io/gmo-internet/conohavps` を `$GOPATH/bin` に向ける（手順は README）。`terraform init` は Registry の v0.1.0 をロックファイルに書くが、実行時は上書き先のバイナリが使われ、その旨の警告が出る。
+- フレーバー名の読み方: `g2l` は Linux、`g2w` は Windows Server、`g2d` は DB サーバー。続く `-t-` は時間課金、`-p-` はまとめトク（前払い）。最後の `c<コア数>m<メモリ GB>` がサイズ（`g2l-t-c4m4` は Linux・時間課金・4 コア・4 GB。512 MB だけ `m512`）。`conohavps_flavor` データソースで名前から ID を引く。
 
-サーバーのプランはフレーバー名で決まる。`g2l` は Linux、`g2w` は Windows Server、`g2d` は DB サーバー。`-t-` は時間課金、`-p-` はまとめトク（前払い）。`c<コア数>m<メモリ>` が続く（`g2l-t-c4m4` は Linux・時間課金・4 コア・4 GB）。`conohavps_flavor` データソースで名前から ID を引ける。
+```hcl
+terraform {
+  required_providers {
+    conohavps = { source = "gmo-internet/conohavps" }
+  }
+}
 
-## 料金
+provider "conohavps" {} # 認証は CONOHAVPS_* の環境変数から
 
-2026-09-28 に ConoHa の料金ページ（https://vps.conoha.jp/pricing/ 、https://vps.conoha.jp/windows/pricing/ ）から読み取った税込み価格。ConoHa は停止中も削除するまで課金し、時間課金は月額上限を超えない。初期費用・データ転送量は無料。
+data "conohavps_flavor" "plan" { name = "g2l-t-c4m4" } # Linux・時間課金・4 コア・4 GB
+data "conohavps_image" "ubuntu" { name = "vmi-ubuntu-24.04-amd64" }
 
-ConoHa 公式の https://vps.conoha.jp/llms.txt に載っている時間課金の月額は、2025 年 3 月のプラン刷新前の旧メモリプランの数字が新プラン名に付いたものになっている（4GB 3,969 円、12GB 8,083 円など）。ここでは料金ページの表示を正とする。
+resource "conohavps_keypair" "me" {
+  name       = "me"
+  public_key = file("~/.ssh/id_ed25519.pub")
+}
 
-### Linux 時間課金（月額上限）
+resource "conohavps_volume" "boot" {
+  name        = "web-boot"
+  size        = 100 # プランに含まれる容量。200・500 にするとブートストレージ容量追加の課金が付く
+  volume_type = "c3j1-ds02-boot"
+  image_ref   = data.conohavps_image.ubuntu.id
+}
 
-| プラン | CPU | SSD | フレーバー名 | 月額上限 |
-| --- | --- | --- | --- | --- |
-| 512MB | 1コア | 30GB | `g2l-t-c1m512` | 751円 |
-| 1GB | 2コア | 100GB | `g2l-t-c2m1` | 1,065円 |
-| 2GB | 3コア | 100GB | `g2l-t-c3m2` | 2,033円 |
-| 4GB | 4コア | 100GB | `g2l-t-c4m4` | 3,608円 |
-| 12GB | 6コア | 100GB | `g2l-t-c6m12` | 7,348円 |
-| 24GB | 8コア | 100GB | `g2l-t-c8m24` | 14,300円 |
-| 48GB | 12コア | 100GB | `g2l-t-c12m48` | 28,600円 |
-| 96GB | 24コア | 100GB | `g2l-t-c24m96` | 53,900円 |
-| 128GB | 40コア | 100GB | `g2l-t-c40m128` | 72,600円 |
+resource "conohavps_instance" "web" {
+  instance_name_tag = "web"
+  flavor_id         = data.conohavps_flavor.plan.id
+  block_device      = [{ uuid = conohavps_volume.boot.id }]
+  key_name          = conohavps_keypair.me.name
+  power_state       = "ACTIVE"
+}
+```
 
-### Linux まとめトク（前払い）
+## ドキュメント
 
-契約期間は 1・3・6・12・24・36 か月。期間分を一括前払いし、途中解約不可。下の額は「更新時」の月額（契約更新後も続く価格）。初回契約には期間限定のキャンペーン割引（2026-10-01 まで）が別に付く。
+- [プロバイダ設定](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/index.md): 認証・リージョン・エンドポイント
+- [README](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/README.md): ビルド、`dev_overrides`、テスト、コントリビュート
+- [CHANGELOG](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/CHANGELOG.md): fork で足したもの
+- [HCL の例](https://github.com/Aid-On/terraform-provider-conohavps/tree/main/examples): リソースごとの `main.tf`
+- [ConoHa VPS Ver.3.0 公開 API](https://doc.conoha.jp/reference/api-vps3/): プロバイダが呼ぶ API の一次資料
+
+### リソース
+
+- [conohavps_instance](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/instance.md): サーバー本体。`flavor_id`・`block_device`（ブートボリューム）・`instance_name_tag` が必須。`power_state` で起動・停止
+- [conohavps_keypair](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/keypair.md): SSH 公開鍵の登録。`key_name` でサーバーに渡す
+- [conohavps_port_attachment](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/port_attachment.md): ポート（ローカルネットワークの `conohavps_port` か `conohavps_additional_ip`）をサーバーに接続する。サーバーは ACTIVE か SHUTOFF
+- [conohavps_instance_autobackup](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/instance_autobackup.md): サーバーのボリュームの日次自動バックアップ。`retention` は 14〜30 日（有料オプション）
+- [conohavps_volume](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/volume.md): ブートストレージ（`volume_type = "c3j1-ds02-boot"`、`image_ref` でイメージ指定）と追加 SSD（`c3j1-ds02-add`）。`size` は 30・100・200・500・1000・5000・10000
+- [conohavps_volume_attachment](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/volume_attachment.md): 追加 SSD をサーバーに接続する。接続・切断はサーバー停止中に行い、1 台に 1 本まで
+- [conohavps_volume_snapshot](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/volume_snapshot.md): ボリュームのスナップショット。1 本だけ作れ、ConoHa が作成 24 時間後に自動削除する。イメージ保存容量を使う
+- [conohavps_securitygroup](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/securitygroup.md): セキュリティグループ
+- [conohavps_securitygroup_rule](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/securitygroup_rule.md): セキュリティグループのルール
+- [conohavps_network](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/network.md): ローカルネットワーク（VLAN）。引数なし、アカウントあたり 10 個まで
+- [conohavps_subnet](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/subnet.md): ローカルネットワークのサブネット。ポートが残っていると消せない
+- [conohavps_port](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/port.md): ローカルネットワーク上のポート。`qos_policy_id` で帯域を変える
+- [conohavps_additional_ip](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/additional_ip.md): 追加 IP（`ip_count` 1〜16）。1 つのポートに載り、`conohavps_port_attachment` でサーバーに付ける。`qos_policy_id` で帯域拡張
+- [conohavps_lb_loadbalancer](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/lb_loadbalancer.md): ロードバランサー本体（VIP）。有料オプション
+- [conohavps_lb_listener](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/lb_listener.md): リスナー（受け付けるプロトコルとポート）
+- [conohavps_lb_pool](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/lb_pool.md): プール（分散方式）
+- [conohavps_lb_member](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/lb_member.md): メンバー（振り分け先の IP とポート）
+- [conohavps_lb_health_monitor](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/lb_health_monitor.md): ヘルスモニター
+- [conohavps_dns_domain](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/dns_domain.md): ConoHa DNS のドメイン（ゾーン）。SOA と NS は自動作成
+- [conohavps_dns_record](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/dns_record.md): DNS レコード
+- [conohavps_objectstorage_container](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/objectstorage_container.md): コンテナ。容量（`conohavps_objectstorage_quota`）が無いとオブジェクトを置けない
+- [conohavps_objectstorage_quota](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/objectstorage_quota.md): オブジェクトストレージの容量（`quota_gb`、100 GB 刻み）。課金が変わる
+- [conohavps_image_quota](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/image_quota.md): イメージ保存容量（`image_size_gb`、550 以上 500 刻み）。課金が変わる
+- [conohavps_role](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/role.md): API サブユーザーに付ける権限の集合
+- [conohavps_subuser](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/subuser.md): API サブユーザー。ロールが許す操作だけ呼べる
+- [conohavps_credential](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/resources/credential.md): API ユーザーの EC2 形式の認証情報（アクセスキーとシークレット）。オブジェクトストレージの S3 互換クライアント用
+
+### データソース
+
+- [conohavps_flavor](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/flavor.md): フレーバー（プラン）を名前で引く。`id` を `conohavps_instance` の `flavor_id` に渡す
+- [conohavps_image](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/image.md): イメージを名前（`vmi-ubuntu-24.04-amd64` など）で引く。`id` をブートボリュームの `image_ref` に渡す
+- [conohavps_qos_policy](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/qos_policy.md): QoS ポリシー（帯域）を名前で引く
+- [conohavps_backups](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/backups.md): 自動バックアップの一覧（新しい順）。`backup_id` を `conohavps_volume` に渡して復元
+- [conohavps_dns_domain](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/dns_domain.md): ConoHa DNS のドメインを名前で引く
+- [conohavps_image_usage](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/image_usage.md): イメージ保存容量の使用量。`conohavps_image_quota` はこれ未満にできない
+- [conohavps_permissions](https://raw.githubusercontent.com/Aid-On/terraform-provider-conohavps/main/docs/data-sources/permissions.md): `conohavps_role` に付けられる権限の一覧
+
+## 料金（2026-09-28 時点、税込み）
+
+出典は ConoHa の料金ページ（https://vps.conoha.jp/pricing/ 、https://vps.conoha.jp/windows/pricing/ ）と、そこからリンクされる仕様書 PDF（https://vps.conoha.jp/pdf/conoha_spec_ja.pdf 、https://vps.conoha.jp/windows/pdf/conoha_ws_spec_ja.pdf 、旧プランは https://vps.conoha.jp/pdf/vswj020-old/conoha_spec_ja.pdf ）。時間単価と GPU の額は仕様書から、それ以外は料金ページから写した。
+
+- 初期費用・データ転送量は無料。時間課金は 1 時間単位で、1 か月使い続けても月額上限を超えない。停止中も削除するまで課金される。
+- まとめトクは 1〜36 か月分を一括前払いし、途中解約できない。下の表は「更新時」の月額（契約更新後も続く価格）。初回契約にはキャンペーンの割引が別に付き、額と期限は時期で変わるので料金ページで見る。
+- 512 MB プランの月額上限は料金ページが 751円、仕様書 PDF が 750円と 1 円ずれている。ここでは料金ページに合わせた。
+- ConoHa 自身が配る https://vps.conoha.jp/llms.txt の時間課金の表は、2025 年 3 月のプラン刷新前（8〜64 GB の旧メモリプラン）の月額が新しいプラン名に付いたまま古い。料金ページを正とする。
+
+### Linux 時間課金
+
+| プラン | CPU | SSD | フレーバー名 | 1 時間 | 月額上限 |
+| --- | --- | --- | --- | --- | --- |
+| 512MB | 1コア | 30GB | `g2l-t-c1m512` | 1.2円 | 751円 |
+| 1GB | 2コア | 100GB | `g2l-t-c2m1` | 1.8円 | 1,065円 |
+| 2GB | 3コア | 100GB | `g2l-t-c3m2` | 3.6円 | 2,033円 |
+| 4GB | 4コア | 100GB | `g2l-t-c4m4` | 6.6円 | 3,608円 |
+| 12GB | 6コア | 100GB | `g2l-t-c6m12` | 13.2円 | 7,348円 |
+| 24GB | 8コア | 100GB | `g2l-t-c8m24` | 24.2円 | 14,300円 |
+| 48GB | 12コア | 100GB | `g2l-t-c12m48` | 48.4円 | 28,600円 |
+| 96GB | 24コア | 100GB | `g2l-t-c24m96` | 96.8円 | 53,900円 |
+| 128GB | 40コア | 100GB | `g2l-t-c40m128` | 129.8円 | 72,600円 |
+
+### Linux まとめトク（更新時の月額）
 
 | プラン | フレーバー名 | 1ヶ月 | 3ヶ月 | 6ヶ月 | 12ヶ月 | 24ヶ月 | 36ヶ月 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -58,7 +127,16 @@ ConoHa 公式の https://vps.conoha.jp/llms.txt に載っている時間課金�
 | 96GB | `g2l-p-c24m96` | 44,198円 | 41,984円 | 39,773円 | 38,991円 | 38,491円 | 37,991円 |
 | 128GB | `g2l-p-c40m128` | 58,927円 | 55,976円 | 53,030円 | 51,987円 | 51,321円 | 50,654円 |
 
-### 旧メモリプラン（8〜64 GB、2025 年 3 月の刷新で 12〜96 GB に置き換わったもの。既存サーバー向け）
+### GPU サーバー（NVIDIA L4、時間課金）
+
+| CPU | SSD | 1 時間 | 月額上限 |
+| --- | --- | --- | --- |
+| 4コア | 100GB | 60.5円 | 36,300円 |
+| 20コア | 100GB | 154.0円 | 90,200円 |
+
+フレーバー名は `conohavps_flavor` の一覧（API の flavors）で確かめる。仕様書にメモリ量とプラン名は載っていない。
+
+### 旧メモリプラン（8〜64 GB。2025 年 3 月の刷新で 12〜96 GB に置き換わった。既存サーバー向け）
 
 | プラン | CPU | フレーバー名（時間課金 / まとめトク） | 時間課金の月額上限 | まとめトクの月額（期間によらず同額） |
 | --- | --- | --- | --- | --- |
@@ -67,35 +145,31 @@ ConoHa 公式の https://vps.conoha.jp/llms.txt に載っている時間課金�
 | 32GB | 12コア | `g2l-t-c12m32` / `g2l-p-c12m32` | 31,460円 | 24,309円 |
 | 64GB | 24コア | `g2l-t-c24m64` / `g2l-p-c24m64` | 59,290円 | 48,618円 |
 
-出典: 料金ページがリンクする旧プランの仕様書 https://vps.conoha.jp/pdf/vswj020-old/conoha_spec_ja.pdf（まとめトクは期間の合計額で載っており、月あたりに直すと同額）。
+### DB サーバー（時間課金）
 
-### DB サーバー（時間課金、月額上限）
-
-| ディスク | フレーバー名 | 月額上限 |
-| --- | --- | --- |
-| 10GB | `g2d-t-c1m1d10` | 798円 |
-| 30GB | `g2d-t-c1m2d30` | 2,637円 |
-| 60GB | `g2d-t-c2m4d60` | 5,553円 |
-| 120GB | `g2d-t-c4m8d120` | 12,124円 |
-| 240GB | `g2d-t-c6m16d240` | 25,168円 |
-| 480GB | `g2d-t-c8m32d480` | 53,482円 |
-| 1,000GB | `g2d-t-c16m64d1000` | 106,722円 |
-
-### Windows Server 時間課金（月額上限）
-
-| プラン | CPU | フレーバー名 | 月額上限 |
+| ディスク | フレーバー名 | 1 時間 | 月額上限 |
 | --- | --- | --- | --- |
-| 1GB | 2コア | `g2w-t-c2m1` | 1,392円 |
-| 2GB | 3コア | `g2w-t-c3m2` | 2,530円 |
-| 4GB | 4コア | `g2w-t-c4m4` | 4,939円 |
-| 8GB | 6コア | `g2w-t-c6m8` | 9,746円 |
-| 16GB | 8コア | `g2w-t-c8m16` | 18,348円 |
-| 32GB | 12コア | `g2w-t-c12m32` | 37,191円 |
-| 64GB | 24コア | `g2w-t-c24m64` | 75,647円 |
+| 10GB | `g2d-t-c1m1d10` | 1円 | 798円 |
+| 30GB | `g2d-t-c1m2d30` | 4円 | 2,637円 |
+| 60GB | `g2d-t-c2m4d60` | 10円 | 5,553円 |
+| 120GB | `g2d-t-c4m8d120` | 21円 | 12,124円 |
+| 240GB | `g2d-t-c6m16d240` | 42円 | 25,168円 |
+| 480GB | `g2d-t-c8m32d480` | 90円 | 53,482円 |
+| 1,000GB | `g2d-t-c16m64d1000` | 191円 | 106,722円 |
 
-### Windows Server まとめトク（前払い、更新時の月額）
+### Windows Server 時間課金
 
-契約期間は 3・6・12・24・36 か月（1 か月はない）。初回契約のキャンペーン割引（2026-10-23 まで）は別。
+| プラン | CPU | フレーバー名 | 1 時間 | 月額上限 |
+| --- | --- | --- | --- | --- |
+| 1GB | 2コア | `g2w-t-c2m1` | 2.8円 | 1,392円 |
+| 2GB | 3コア | `g2w-t-c3m2` | 5.1円 | 2,530円 |
+| 4GB | 4コア | `g2w-t-c4m4` | 10.1円 | 4,939円 |
+| 8GB | 6コア | `g2w-t-c6m8` | 20.2円 | 9,746円 |
+| 16GB | 8コア | `g2w-t-c8m16` | 38.0円 | 18,348円 |
+| 32GB | 12コア | `g2w-t-c12m32` | 77.2円 | 37,191円 |
+| 64GB | 24コア | `g2w-t-c24m64` | 158.2円 | 75,647円 |
+
+### Windows Server まとめトク（更新時の月額。1 か月契約はない）
 
 | プラン | フレーバー名 | 3ヶ月 | 6ヶ月 | 12ヶ月 | 24ヶ月 | 36ヶ月 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -107,36 +181,45 @@ ConoHa 公式の https://vps.conoha.jp/llms.txt に載っている時間課金�
 | 32GB | `g2w-p-c12m32` | 36,685円 | 36,053円 | 34,092円 | 34,029円 | 33,902円 |
 | 64GB | `g2w-p-c24m64` | 74,635円 | 73,370円 | 69,322円 | 68,943円 | 68,310円 |
 
-Windows Server のライセンス: RDS SAL（リモートデスクトップ）1 ユーザー 1,386円/月、Microsoft Office SAL（Office 2021 Professional Plus）4,312円/月。
+Windows Server のライセンス（月額、ユーザー数分）: リモートデスクトップ（RDS）SAL 1,386円。Microsoft Office SAL（Office 2021 Professional Plus）4,312円で、RDS SAL も併せて要る。サーバー管理目的のリモートデスクトップ接続には SAL は不要。
 
-### オプション（月額。時間課金あり、月額上限まで）
+### オプション
 
-| オプション | Terraform での表し方 | 料金 |
-| --- | --- | --- |
-| 追加 SSD | `conohavps_volume`（`volume_type = "c3j1-ds02-add"`、`size`） | 200GB 3,025円、500GB 5,445円、1,000GB 8,954円、5,000GB 44,770円、10,000GB 89,540円 |
-| ブートストレージ容量追加 | `conohavps_volume`（`volume_type = "c3j1-ds02-boot"`、`size` 200 か 500） | +100GB（200GB ブート）1,513円、+400GB（500GB ブート）4,356円。プランに 100GB（512MB プランは 30GB）が含まれる |
-| 追加 IP | `conohavps_additional_ip`（`ip_count` 1〜16） | 1 個 424円 |
-| ロードバランサー | `conohavps_lb_loadbalancer`（リスナー・プール・メンバー・ヘルスモニターは無料） | 1,210円 |
-| イメージ保存 | `conohavps_image_quota`（`image_size_gb` は 550 以上、500 刻み） | 50GB まで無料、追加 500GB ごとに 1,650円。ボリュームのスナップショットもこの容量を使う |
-| 自動バックアップ | `conohavps_instance_autobackup`（`retention` 14〜30 日） | バックアップ容量 100GB 363円、200GB 847円、300GB 1,210円、500GB 2,057円、600GB 2,420円、700GB 2,904円。14 世代を超える 1 世代ごとに 100GB あたり 66円 |
-| ネットワーク帯域拡張（100 → 300 Mbps） | ポートの `qos_policy_id` に QoS ポリシー `global-i_300000-o_300000` の ID（`conohavps_qos_policy` データソースで名前から引く）。サーバー自身のポートは API からは変えられない | 9,900円 |
-| オブジェクトストレージ | `conohavps_objectstorage_quota`（`quota_gb` は 100 刻み）。コンテナ（`conohavps_objectstorage_container`）は無料 | 100GB ごとに 545円。リクエスト・転送は無料 |
-| ローカルネットワーク・DNS・セキュリティグループ・SSH 鍵・サブユーザー | `conohavps_network` / `conohavps_subnet` / `conohavps_port` / `conohavps_dns_domain` / `conohavps_dns_record` / `conohavps_securitygroup` / `conohavps_keypair` / `conohavps_subuser` ほか | 無料 |
+時間課金で、月額上限まで。
+
+| オプション | Terraform での表し方 | 1 時間 | 月額 |
+| --- | --- | --- | --- |
+| 追加 SSD 200GB | `conohavps_volume`（`volume_type = "c3j1-ds02-add"`、`size = 200`）＋ `conohavps_volume_attachment` | 4.3円 | 3,025円 |
+| 追加 SSD 500GB | 同上 `size = 500` | 7.7円 | 5,445円 |
+| 追加 SSD 1,000GB | 同上 `size = 1000` | 12.5円 | 8,954円 |
+| 追加 SSD 5,000GB | 同上 `size = 5000` | 62.2円 | 44,770円 |
+| 追加 SSD 10,000GB | 同上 `size = 10000` | 124.4円 | 89,540円 |
+| ブートストレージ容量追加 +100GB | ブートの `conohavps_volume` を `size = 200` に。API 限定で、512 MB プランとまとめトクでは使えない | 2.6円 | 1,513円 |
+| ブートストレージ容量追加 +400GB | 同上 `size = 500` | 6.1円 | 4,356円 |
+| 追加 IP（1 個あたり） | `conohavps_additional_ip`（`ip_count` 1〜16） | 0.6円 | 424円 |
+| ロードバランサー | `conohavps_lb_loadbalancer`（リスナー・プール・メンバー・ヘルスモニターは無料） | 1.7円 | 1,210円 |
+| イメージ保存（追加 500GB ごと） | `conohavps_image_quota`（`image_size_gb` は 550 以上、500 刻み）。50GB まで無料。ボリュームのスナップショットもこの容量を使う | 2.4円 | 1,650円 |
+| 自動バックアップ（容量 100GB） | `conohavps_instance_autobackup`（`retention` 14〜30 日）。512 MB プランでは使えない | 0.7円 | 363円 |
+| 自動バックアップ（容量 200 / 300 / 500 / 600 / 700GB） | 同上。対象ボリュームの容量で決まる | — | 847円 / 1,210円 / 2,057円 / 2,420円 / 2,904円 |
+| 自動バックアップの世代追加 | `retention` を 15 以上に。14 世代を超える 1 世代ごと、容量 100GB あたり | — | 66円 |
+| ネットワーク帯域拡張（100 → 300 Mbps） | ポートの `qos_policy_id` に QoS ポリシー `global-i_300000-o_300000` の ID（`conohavps_qos_policy` で名前から引く）。サーバー自身のポートは API からは変えられない | 17円 | 9,900円 |
+| オブジェクトストレージ（100GB ごと） | `conohavps_objectstorage_quota`（`quota_gb` は 100 刻み）。コンテナは無料、リクエストと転送も無料 | 0.9円 | 545円 |
+
+無料: ローカルネットワーク（`conohavps_network` / `conohavps_subnet` / `conohavps_port`）、DNS（`conohavps_dns_domain` / `conohavps_dns_record`）、セキュリティグループ、SSH 鍵、サブユーザー・ロール・認証情報、API。
 
 ### QoS ポリシー（ネットワーク帯域）
 
-ConoHa が公開する 5 つのポリシー（API: QoS ポリシー一覧取得）。有料なのは 300 Mbps だけ。
+ConoHa が公開する 5 つ（API: QoS ポリシー一覧取得）。有料なのは 300 Mbps だけ。
 
 | ポリシー名 | 帯域 | 課金 |
 | --- | --- | --- |
 | `global-i_100000-o_100000` | 100 Mbps | 既定、無料 |
-| `global-i_300000-o_300000` | 300 Mbps | 有料（ネットワーク帯域拡張 9,900円/月）。タグ `billing_flag=true` |
+| `global-i_300000-o_300000` | 300 Mbps | 有料（ネットワーク帯域拡張）。タグ `billing_flag=true` |
 | `global-i_512-o_512` | 512 kbps | 制限用、無料 |
 | `local-i_1000000-o_1000000` | 1 Gbps | ローカルネットワーク用、無料 |
 | `global-i_1000000-o_1000000` | 1 Gbps | GPU サーバー用、無料 |
 
-## 使い方
+## Optional
 
-- ビルドして `dev_overrides` で使う手順、テスト、コントリビュートは README.md。
-- 各リソースの属性は docs/resources/、データソースは docs/data-sources/、HCL の例は examples/。
-- 料金を読む道具: https://github.com/O6lvl4/archgopher（Terraform からこのプロバイダのリソースを読み、上の価格で月額を出す）。
+- [archgopher](https://github.com/O6lvl4/archgopher): Terraform からこのプロバイダのリソースを読み、上の価格で月額を見積もる道具
+- [gmo-internet/terraform-provider-conohavps](https://github.com/gmo-internet/terraform-provider-conohavps): fork 元

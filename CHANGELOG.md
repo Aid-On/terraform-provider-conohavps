@@ -2,7 +2,7 @@
 
 DOCS:
 
-* `llms.txt` summarizes the resources, the flavor names and ConoHa's prices (hourly, prepaid by term, Windows, options, QoS policies) as read from the pricing pages on 2026-09-28, since ConoHa's own llms.txt lists the pre-March-2025 hourly prices under the new plan names
+* `llms.txt` is the entry point for LLMs and agents: provider setup with a minimal HCL example, a link per resource and data source to its doc on GitHub, how flavor names are read, and ConoHa's tax-inclusive prices as read from the pricing pages and spec sheets on 2026-09-28 (hourly rates and monthly caps, prepaid by term, old memory plans, GPU, DB, Windows with SAL, options, QoS policies). ConoHa's own llms.txt lists the pre-March-2025 hourly prices under the new plan names. `go run ./tools/llmsprices` checks that every amount in the file still appears on ConoHa's pages and spec sheets
 
 FEATURES:
 
